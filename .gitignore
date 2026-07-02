@@ -1,0 +1,9 @@
+# serena-forge / Serena local state (never commit — machine-local, churny)
+.serena-forge-off
+.serena/cache/
+.serena/memories/
+
+# OS / editor cruft
+.DS_Store
+*.swp
+*~

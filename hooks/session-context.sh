@@ -11,10 +11,10 @@
 # and exit 0. The additionalContext string is added to the model's context for
 # the session. This text is loaded EVERY session, so keep it tight.
 #
-# FAIL-OPEN INVARIANT: this hook must never break session startup because of its
-# own bug. Any internal error (jq missing, bad stdin, jq -n failure) => emit no
-# context and exit 0. Silent exit 0 simply means "no banner this session"; the
-# session starts normally.
+# FAIL-OPEN ON OWN MALFUNCTION: this hook must never break session startup
+# because of its OWN bug. Any internal error (jq missing, bad stdin, jq -n
+# failure) => emit no context and exit 0. Silent exit 0 simply means "no banner
+# this session"; the session starts normally.
 
 set -uo pipefail  # -e intentionally omitted: every error path must still exit 0
 
@@ -45,19 +45,14 @@ else
 fi
 
 # --- The injected banner -----------------------------------------------------
-# Tight but complete: division of labor (cbm never abandoned), read policy,
-# write policy, escape hatch, onboarding status.
+# Tight: read policy, write policy, onboarding status. No bypass instructions.
 context="Serena-first protocol (serena-forge active).
 
-Division of labor — codebase-memory-mcp and Serena COEXIST; NEVER abandon codebase-memory-mcp in favor of Serena:
-- codebase-memory-mcp (cbm): the global multi-repo graph — architecture, complexity, cross-service impact, Cypher queries, dead-code. Use it for anything spanning repos or reasoning about structure at scale.
-- Serena: reading, editing, and refactoring SYMBOLS of the CURRENT repo. Use it for precise, symbol-level navigation and edits in the repo you are working in.
+Serena provides symbol-level read and edit tools for the CURRENT repository, backed by the Roslyn language server.
 
 Read policy: native Read of .cs files is allowed, but PREFER Serena for navigation — get_symbols_overview to survey a file, find_symbol to jump to a target, find_referencing_symbols to find callers — instead of reading whole files.
 
-Write policy: editing .cs via Edit/Write/MultiEdit is BLOCKED globally by serena-forge. Change C# through Serena's symbolic edits: replace_symbol_body, insert_after_symbol, insert_before_symbol.
-
-Escape hatch (anti-deadlock): if Serena's Roslyn LSP is not ready — initialization can take ~30s on large brownfield solutions, and .NET 9 projects hit a Roslyn BuildHost timeout — bypass the .cs write block with SERENA_FORGE_OFF=1 or by creating a .serena-forge-off file in the working directory.
+Write policy: editing .cs via Edit/Write/MultiEdit is BLOCKED globally by serena-forge. Change C# through Serena's symbolic edits: replace_symbol_body, insert_after_symbol, insert_before_symbol (and rename_symbol / safe_delete_symbol for structural changes). If Serena cannot make an edit, stop and ask the user to fix Serena or disable the hook — do not work around the block.
 
 ${onboard_line}"
 

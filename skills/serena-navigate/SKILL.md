@@ -1,7 +1,7 @@
 ---
 name: serena-navigate
-description: Read and navigate C# code in the CURRENT repo through Serena's symbolic read tools (get_symbols_overview, find_symbol, find_referencing_symbols, search_for_pattern) instead of reading whole files. Fetches exact symbol bodies, callers, and references on demand. Complements codebase-memory-mcp (cbm), which stays in place for cross-repo, architectural, and impact questions.
-when_to_use: "Trigger when the user says \"read this class\", \"find the symbol\", \"who calls\", \"navigate the code\", or otherwise wants to inspect a specific type/method, its body, or its callers in the current repository. Use for detailed symbol-level reading in THIS repo. For architecture-wide, cross-repo, complexity, or impact questions, use cbm instead."
+description: Read and navigate C# code in the CURRENT repo through Serena's symbolic read tools (get_symbols_overview, find_symbol, find_referencing_symbols, search_for_pattern) instead of reading whole files. Fetches exact symbol bodies, callers, and references on demand.
+when_to_use: "Trigger when the user says \"read this class\", \"find the symbol\", \"who calls\", \"navigate the code\", or otherwise wants to inspect a specific type/method, its body, or its callers in the current repository."
 ---
 
 ## Purpose
@@ -11,32 +11,8 @@ lets you pull a class outline, a single method body, or every caller of a symbol
 without loading an entire `.cs` file into context. This keeps context lean and
 answers precise.
 
-This skill covers **reading and navigation only**. It does not edit code
-(that is `serena-refactor`) and does not replace `codebase-memory-mcp` (cbm).
-
-## cbm vs Serena — decision guide
-
-Both stay active. They answer different questions; pick by scope.
-
-**Use cbm** (`codebase-memory-mcp` — the global knowledge graph) when the
-question spans **more than the current repo's symbols in detail**:
-- across all repos / multiple services / cross-service impact
-- architecture overview, module clusters, dependency shape
-- complexity / hot-path / bottleneck metrics, dead code
-- broad "what calls what across the system" and Cypher-style graph queries
-- tools: `get_architecture`, `search_graph`, `trace_path`, `query_graph`,
-  `search_code`, `get_code_snippet`
-
-**Use Serena** (this skill) when the question is about **this repo's symbols in
-detail** — exact bodies and references, resolved by the language server:
-- read a specific class/method/property body verbatim
-- get a file's symbol outline before deciding what to read
-- find the exact callers or references of one symbol
-- regex-scan this repo's source for a literal or pattern
-
-Rule of thumb: **cbm to find WHERE and understand the system; Serena to read the
-EXACT code and its references in the repo you're working in.** Never drop cbm —
-it is the map; Serena is the magnifying glass.
+This skill covers **reading and navigation only**. It does not edit code —
+that is `serena-refactor`.
 
 ## The read workflow
 
@@ -81,8 +57,7 @@ Use only these names:
 - **"Find the symbol `TenantResolver`"** → `find_symbol` by name; if ambiguous,
   `get_symbols_overview` on the candidate file, or `find_declaration`.
 - **"Who calls `InvokeWithRequestContextAsync`"** →
-  `find_referencing_symbols` on that method. (For cross-repo/system-wide callers,
-  use cbm `trace_path` instead.)
+  `find_referencing_symbols` on that method.
 - **"Navigate the code" / "what's in this file"** → `get_symbols_overview` to
   get the outline, then `find_symbol` on whatever the user drills into.
 - **"Where is this string / attribute used"** → `search_for_pattern` with the
@@ -92,10 +67,10 @@ Use only these names:
 
 - **This repo only.** Serena's tools resolve against the currently activated
   project. If the project isn't active, it must be activated (see
-  `serena-forge-setup`). For anything spanning other repos, use cbm.
+  `serena-forge-setup`).
 - **.NET 10 only.** The Roslyn backend requires .NET 10+; on .NET 9 projects the
-  language server times out. If symbol lookups fail on a .NET 9 solution, fall
-  back to cbm / native Read rather than fighting the LSP.
+  language server times out. If symbol lookups fail on a .NET 9 solution, stop
+  and tell the user rather than fighting the LSP.
 - **First-use warm-up.** On a large brownfield solution the language server may
   take up to ~30s to finish initializing before symbol results are reliable. If a
   lookup returns nothing immediately after activation, retry once after it

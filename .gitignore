@@ -1,5 +1,4 @@
-# serena-forge / Serena local state (never commit — machine-local, churny)
-.serena-forge-off
+# Serena local state (never commit — machine-local, churny)
 .serena/cache/
 .serena/memories/
 

@@ -9,13 +9,6 @@ allowed-tools: "Bash(git diff*) Bash(git status*) Read"
 
 Native `Edit`, `Write`, and `MultiEdit` on `.cs` files are **denied globally** by serena-forge (write-only enforcement, active in every repo). All C# code changes go through **Serena's symbolic write tools**, which edit by *symbol* (class / method / property) via the Roslyn LSP rather than by line-matching text. This keeps edits surgical and keeps Serena's index consistent.
 
-This does **not** replace `codebase-memory-mcp`. Keep the division of labor:
-
-- **codebase-memory-mcp (cbm)** — global, multi-repo. Architecture overview, complexity/hot-path signals, cross-service impact, dead-code, Cypher queries. Use it to *decide what to change and understand blast radius*.
-- **Serena** — the **current repo only**. Read, navigate, and **edit** symbols. Use it to *make the change*.
-
-A typical refactor: ask cbm "who calls this / what's the impact", then use Serena to locate and edit the symbol. Never drop cbm in favour of Serena.
-
 ## Workflow: locate → edit → verify
 
 1. **Locate the symbol** (Serena read tools — see the `serena-navigate` skill):
@@ -79,7 +72,7 @@ This is exactly what bit **a service** (`a local checkout`, a PR): `Program.cs` 
      git commit --no-verify -m "refactor(scope): <ticket> <description>"
      ```
      (`--no-verify` also sidesteps the offline husky pre-commit/pre-push hooks in some repos, which fail with no network. Do **not** add npm/husky dependencies to work around them.)
-   - Restore the intended LF lines that the formatter flipped, editing the file **in place** (this is a non-`.cs`-tool path, run via Bash, so the write block does not apply):
+   - Restore the intended LF lines that the formatter flipped:
      ```bash
      perl -i -pe 's/\r$//' path/to/Program.cs        # strip CR the formatter added back to LF
      ```
@@ -89,11 +82,11 @@ This is exactly what bit **a service** (`a local checkout`, a PR): `Program.cs` 
 
 3. **Prefer to avoid the churn entirely** when the file is LF-on-disk: keep edits symbol-scoped, and after the turn's format flush, verify the file's line endings match what's committed before you stage.
 
-## Emergency escape hatch (anti-deadlock)
+## When Serena cannot make the edit
 
-If Serena cannot make the edit — the Roslyn LSP hasn't finished initializing (large brownfield solutions take up to ~30s for `projectInitializationComplete`), it timed out, or the symbolic tools genuinely can't express the change — do **not** get stuck. Temporarily disable serena-forge's `.cs` write block so native `Edit`/`Write` work again:
+If Serena can't perform the change — the Roslyn LSP hasn't finished initializing (large brownfield solutions take up to ~30s for `projectInitializationComplete`), it timed out, the repo is `.NET 9` (Serena's Roslyn backend reliably trips a 10s BuildHost timeout — serena-forge is `.NET 10`-only), or the symbolic tools genuinely can't express the change — **do not attempt to work around the write block.** There is no bypass to reach for.
 
-- Drop a marker in the working directory: `touch .serena-forge-off` (remove it when done), **or**
-- Set the env var for the session: `export SERENA_FORGE_OFF=1`.
+Instead:
 
-Either one is the sanctioned safety valve so you never deadlock waiting on the LSP. Turn the block back on (delete the marker / unset the var) once you're past the blocker, and re-run `get_diagnostics_for_file` on anything you edited by hand. Note: `.NET 9` projects will *reliably* trip Serena's Roslyn 10s BuildHost timeout — serena-forge is `.NET 10`-only, so on a `.NET 9` repo the escape hatch is the expected path, not a workaround.
+1. If it looks like a warm-up delay, wait for the LSP to finish initializing and retry the symbolic edit once.
+2. Otherwise, **stop and tell the user** exactly what failed (LSP unavailable / timed out / .NET 9 / change not expressible symbolically) and ask them to either fix Serena or disable the serena-forge hook. Do not fall back to native `Edit`/`Write` — the block is intentional.

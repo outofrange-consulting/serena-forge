@@ -4,8 +4,7 @@ description: >-
   Onboard the CURRENT repository with Serena so its Roslyn-backed symbolic
   read/edit tools work. Activates the project, runs Serena onboarding, waits for
   the first index, verifies the C# language server came up, and explains the
-  .NET 10-only rule and the anti-deadlock escape hatch. Serena handles symbols
-  in the current repo; codebase-memory-mcp (cbm) stays for cross-repo work.
+  .NET 10-only rule.
 when_to_use: >-
   Trigger when the user says "onboard serena", "onboard this repo", "set up
   serena here", "index this repo with serena", "activate serena", "serena isn't
@@ -22,26 +21,9 @@ Serena gives symbol-level **read and edit** tools (find/rename/replace a symbol,
 find references) for the repo you are in right now. `serena-forge` enforces this
 globally: direct `Edit`/`Write`/`MultiEdit` on `.cs` files is DENIED and you are
 redirected to Serena's symbolic edits. So a repo you actually want to change in
-C# must be onboarded first, or you cannot edit its `.cs` files at all (except via
-the escape hatch below).
+C# must be onboarded first, or you cannot edit its `.cs` files at all.
 
 This skill onboards **one repo** — the current working directory.
-
-## Division of labour — cbm stays, do NOT drop it
-
-`serena-forge` does **not** replace `codebase-memory-mcp`. They cover different
-jobs; keep both:
-
-| Use `cbm` (global, multi-repo) | Use Serena (current repo, symbol-level) |
-| --- | --- |
-| Architecture overview, package/service map | Read one symbol's body / signature |
-| Complexity, hot paths, dead-code, Cypher queries | Find references / implementations of a symbol |
-| Cross-service / cross-repo impact analysis | Rename / replace / insert a symbol (edits) |
-| "Where does X live across 29 repos?" | "Edit method Foo in THIS repo safely" |
-
-Rule of thumb: **explore and reason with cbm; read-precisely-and-edit with
-Serena.** Never tell the agent to abandon cbm — onboarding a repo with Serena is
-additive.
 
 ## STOP — the .NET 10-only rule (read this first)
 
@@ -69,8 +51,8 @@ grep -rEn '<TargetFrameworks?>' --include='*.csproj' . 2>/dev/null
 
 If **any** `.cs` project you need to touch targets `net9.0`, `net8.0`, or lower,
 STOP and tell the user: this repo cannot be onboarded with Serena's Roslyn
-backend — keep reading it with `cbm` and native `Read`, and use the escape hatch
-if you need to edit its `.cs` files. (`net10.0` and mixed solutions where the
+backend, and ask them how to proceed (fix Serena's requirements or disable the
+serena-forge hook for this repo). (`net10.0` and mixed solutions where the
 projects you edit are all `net10.0+` are fine.)
 
 ## Onboarding steps
@@ -112,8 +94,8 @@ runtime via `activate_project` in step 2 below, not pinned at launch.)
      non-`net10.0` project slipped in — recheck step 1, or (b) the ~30s init has
      not finished — wait once more, then smoke-test again.
    - If it keeps timing out on a confirmed `net10.0` repo, treat the LSP as
-     unavailable: use the **escape hatch**, fall back to `cbm` + native `Read`,
-     and tell the user rather than looping.
+     unavailable and **stop and tell the user** (ask them to fix Serena or
+     disable the serena-forge hook) rather than looping or working around it.
 
 6. **Confirm state** any time with `get_current_config` (shows the active
    project and config).
@@ -134,26 +116,19 @@ It is per-repo and self-contained. Global Serena config lives separately at
 `~/.serena/serena_config.yml` (auto-created; edit with `serena config edit`). To
 un-onboard a repo, call `remove_project`; deleting `.serena/` also resets it.
 
-## Escape hatch — never deadlock
+## When onboarding can't succeed
 
 Because `.cs` writes are blocked globally, a repo where Serena's LSP won't come
 up (the ~30s init never completes, a .NET 9 project, a Roslyn download failure)
-would otherwise leave you unable to edit any `.cs` file. The escape hatch is the
-safety valve — it disables `serena-forge`'s write-blocking so native
-`Edit`/`Write` on `.cs` work again. Two forms:
+leaves you unable to edit its `.cs` files. There is **no bypass** — do not route
+around the write block.
 
-```bash
-# Per-directory, temporary: drop a marker in the current repo.
-touch .serena-forge-off      # remove it to re-enable the guard
-
-# Session-wide: export the env var before starting Claude Code.
-export SERENA_FORGE_OFF=1
-```
-
-Either one turns the guard off. Use it when onboarding genuinely can't succeed —
-do **not** use it to skip onboarding out of impatience during the normal ~30s
-first-index wait. When you use the escape hatch, say so, and prefer `cbm` +
-native `Read` for understanding the code while Serena is unavailable.
+- If it's the normal ~30s first-index wait, let it finish and retry; don't
+  conclude failure prematurely.
+- If onboarding genuinely fails (`.NET 9`, the LSP never comes up, a download
+  error), **stop and tell the user** what failed and ask them to fix Serena or
+  disable the serena-forge hook. Report the specific cause; don't loop or fall
+  back to native edits.
 
 ## Pitfall — Serena `.cs` edits get reformatted at end of turn
 

@@ -148,9 +148,7 @@ All hooks **fail open on their own malfunction**: an internal error or a missing
 
 2. **~30 s cold init.** On large brownfield solutions, Serena waits up to ~30 s for Roslyn's `workspace/projectInitializationComplete` before it's ready. The first C# operation after activation can stall for that long (plus a one-time NuGet download of the language server). If the LSP isn't ready, wait and retry once — do not conclude a symbol is missing, and do not try to route around the write block.
 
-3. **CRLF / `dotnet format` diff pollution.** A live end-of-turn formatter (`queue-format.sh` → `flush-format-queue.sh`, running `dotnet format`) reformats edited `.cs` files. a corporate `.editorconfig` forces **CRLF** while some sources (e.g. `Program.cs`) are **LF**, so a surgical Serena symbol edit gets amplified at turn-end into a whole-file CRLF/whitespace diff. After a `/serena-refactor`, **inspect the diff**; if it's polluted, commit with `--no-verify` and re-insert the intended change via `perl -i`. This is a formatter concern on the `PostToolUse`/`Stop` phase — it does not involve serena-forge's own hooks, but the refactor skill flags it.
-
-4. **husky offline (unrelated, avoid making it worse).** some repos have husky `pre-commit`/`pre-push` hooks that fail offline (npx can't install). serena-forge does not touch these — but **don't add npm/husky dependencies** to work around Serena; that's out of scope and makes the offline problem worse.
+3. **CRLF / `dotnet format` diff pollution.** A live end-of-turn formatter (`queue-format.sh` → `flush-format-queue.sh`, running `dotnet format`) reformats edited `.cs` files. When a repo's `.editorconfig` forces **CRLF** while some sources (e.g. `Program.cs`) are checked in as **LF**, a surgical Serena symbol edit gets amplified at turn-end into a whole-file CRLF/whitespace diff. After a `/serena-refactor`, **inspect the diff**; if it's polluted, commit with `--no-verify` and re-insert the intended change via `perl -i`. This is a formatter concern on the `PostToolUse`/`Stop` phase — it does not involve serena-forge's own hooks, but the refactor skill flags it.
 
 ---
 

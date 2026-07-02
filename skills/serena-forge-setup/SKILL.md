@@ -193,8 +193,8 @@ around the write block.
 
 Not a setup step, but flag it while onboarding a .NET repo: a live PostToolUse +
 Stop formatter (`queue-format.sh` → `flush-format-queue.sh`, running
-`dotnet format`) reformats every edited `.cs` file at turn-end. On a corporate repos
-`.editorconfig` forces CRLF, so a surgical Serena symbolic edit can be amplified
+`dotnet format`) reformats every edited `.cs` file at turn-end. On repos whose
+`.editorconfig` forces CRLF, a surgical Serena symbolic edit can be amplified
 into a whole-file CRLF/whitespace diff. This is handled by the **serena-refactor**
 skill (check the diff; commit `--no-verify` and re-insert via `perl -i` if the
 diff is polluted) — mention it, but don't try to disable the formatter here. Do

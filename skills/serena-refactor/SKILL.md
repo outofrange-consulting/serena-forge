@@ -16,7 +16,7 @@ Native `Edit`, `Write`, and `MultiEdit` on `.cs` files are **denied globally** b
    - `find_symbol` with the name path (e.g. `MyClass/DoWork`) to get the exact symbol; pass `include_body: true` when you need to read it before editing.
    - `find_referencing_symbols` before any rename/move/delete, so you know what depends on it.
 2. **Edit** with the matching write tool (below).
-3. **Verify** with `get_diagnostics_for_symbol` (or `get_diagnostics_for_file`) to confirm the edit compiles with no new errors — then **check the git diff** (see the CRLF pitfall — this step is not optional on a corporate repos).
+3. **Verify** with `get_diagnostics_for_symbol` (or `get_diagnostics_for_file`) to confirm the edit compiles with no new errors — then **check the git diff** (see the CRLF pitfall — this step is not optional when `.editorconfig` enforces CRLF).
 
 > **Build safety net (automatic).** serena-forge queues the touched `.csproj` on every symbolic edit and runs one scoped `dotnet build --no-restore` at end of turn (`queue-build.sh` → `flush-build-queue.sh`, Stop hook). If it fails, the turn is blocked and the compiler errors are handed back to you — **fix them through Serena before finishing; a red build is unfinished work.** `get_diagnostics_*` is your fast in-loop check; the end-of-turn build is the real gate. For a wider guarantee, follow the build with the targeted tests of the modified slice (in VSA the per-slice test scope keeps this cheap). Opt out with `SERENA_FORGE_BUILD=0` only if the user asks.
 
@@ -51,13 +51,11 @@ Fine-grained fallbacks also exist (`replace_lines`, `insert_at_line`, `delete_li
 
 ## CRITICAL pitfall — the format hook rewrites your .cs at turn end (CRLF churn)
 
-**A `dotnet format` hook runs over every `.cs` file Serena touches, and it will amplify a one-line symbolic edit into a whole-file CRLF/whitespace diff.** This is the single most common way a clean Serena refactor turns into an unreviewable, un-mergeable diff on a corporate repos.
+**A `dotnet format` hook runs over every `.cs` file Serena touches, and it will amplify a one-line symbolic edit into a whole-file CRLF/whitespace diff.** This is the single most common way a clean Serena refactor turns into an unreviewable, un-mergeable diff.
 
 Why it happens:
 - The live formatting path is PostToolUse → `~/.claude/hooks/queue-format.sh` (enqueues the edited path to `<repo>/.claude/.format-queue`), then the **Stop hook** → `~/.claude/hooks/flush-format-queue.sh` runs `dotnet format <sln> --include <files> --no-restore` **once at end of turn**. (An older per-file variant, `~/.claude/hooks/dotnet-format.sh`, does the same for a single file.) Serena's symbolic edits are picked up by this hook just like a native edit would be.
-- a corporate `.editorconfig` **forces CRLF**, but some source files — notably several `Program.cs` — are checked in as **LF**. `dotnet format` normalizes line endings for the whole included file, so your surgical change gets bundled with a CRLF re-write of every line in the file.
-
-This is exactly what bit **a service** (`a local checkout`, a PR): `Program.cs` is LF on `develop`, `.editorconfig` demands CRLF, and the format hook polluted the diff.
+- When the repo's `.editorconfig` **forces CRLF** but some source files — notably `Program.cs` — are checked in as **LF**, `dotnet format` normalizes line endings for the whole included file, so your surgical change gets bundled with a CRLF re-write of every line in the file.
 
 **Always do this after a Serena edit to a .cs file:**
 
@@ -73,7 +71,7 @@ This is exactly what bit **a service** (`a local checkout`, a PR): `Program.cs` 
      ```bash
      git commit --no-verify -m "refactor(scope): <ticket> <description>"
      ```
-     (`--no-verify` also sidesteps the offline husky pre-commit/pre-push hooks in some repos, which fail with no network. Do **not** add npm/husky dependencies to work around them.)
+     (`--no-verify` also sidesteps offline pre-commit/pre-push hooks that fail with no network. Do **not** add npm/husky dependencies to work around them.)
    - Restore the intended LF lines that the formatter flipped:
      ```bash
      perl -i -pe 's/\r$//' path/to/Program.cs        # strip CR the formatter added back to LF

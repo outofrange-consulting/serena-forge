@@ -12,7 +12,7 @@ when_to_use: >-
   symbolic tool (find_symbol / replace_symbol_body) errors or returns nothing on
   a repo that was never onboarded.
 user-invocable: true
-allowed-tools: "Bash Read Grep Glob"
+allowed-tools: "Bash Read Grep Glob Edit Write"
 ---
 
 # Serena Forge — onboard the current repo
@@ -70,13 +70,46 @@ runtime via `activate_project` in step 2 below, not pinned at launch.)
 2. **Activate the current repo.** Call the `activate_project` tool with the
    **absolute** path to the repo root (use `pwd` to get it — always absolute,
    never relative). This registers the project and points Serena's LSP at it.
+   Activation creates `.serena/project.yml`.
 
-3. **Run onboarding.** Call the `onboarding` tool. This inspects the project and
+3. **Set `ignored_paths` before indexing.** Exclude build output and generated
+   code from the scan so the index is smaller and faster and `find_symbol` never
+   surfaces generated noise. Add these to `.serena/project.yml` (create the
+   `ignored_paths:` block if it isn't there):
+
+   ```yaml
+   # .serena/project.yml
+   ignored_paths:
+     - "**/bin/**"
+     - "**/obj/**"
+     - "**/*.g.cs"           # generated
+     - "**/*.Designer.cs"    # designer-generated
+     - "**/*.AssemblyInfo.cs"
+     - "**/node_modules/**"  # if the repo has any JS tooling
+   ```
+
+4. **Pre-index the repo (avoid the first-`find_symbol` cold start).** Build
+   Serena's symbol index up front so the first symbolic call in a real session
+   doesn't pay Roslyn's cold start. Run the CLI once from the repo root:
+
+   ```bash
+   uvx -p 3.13 --from git+https://github.com/oraios/serena \
+     serena project index "$(pwd)"
+   ```
+
+   On a large brownfield solution this can take a while (it downloads the Roslyn
+   language server from NuGet on first use and walks the whole tree) — that is the
+   cost you are paying *now* instead of on the user's first query. If it errors on
+   a `.NET 9` target, that's the same .NET 10-only issue (step 1) — do not force it.
+
+5. **Run onboarding.** Call the `onboarding` tool. This inspects the project and
    writes Serena's initial project memories (structure, build/test commands,
    conventions) into `.serena/memories/`. You can confirm what it wrote with
    `list_memories`, and read Serena's own guidance with `initial_instructions`.
+   These memories are meant to be **committed** — they are the persistence layer
+   that lets later sessions skip re-exploration (see "Repo housekeeping" below).
 
-4. **Wait for the first index (~30s) — do not retry.** Roslyn indexes the whole
+6. **Wait for the first index (~30s) — do not retry.** Roslyn indexes the whole
    solution and emits a `workspace/projectInitializationComplete` notification
    when done; Serena waits up to **~30 seconds** for it before treating the
    server as ready. On a large brownfield solution the first symbolic call can
@@ -85,7 +118,7 @@ runtime via `activate_project` in step 2 below, not pinned at launch.)
    **This wait is normal — do not hammer retries, and do not conclude Serena is
    broken before ~30s have elapsed.**
 
-5. **Verify the C# LSP actually came up.** Run a cheap symbolic read as a smoke
+7. **Verify the C# LSP actually came up.** Run a cheap symbolic read as a smoke
    test — call `get_symbols_overview` on one real `.cs` file (a small
    `Program.cs` or any class file). Success (a list of symbols) means Roslyn is
    live and you may now use all Serena read/edit tools. Alternatives:
@@ -97,8 +130,34 @@ runtime via `activate_project` in step 2 below, not pinned at launch.)
      unavailable and **stop and tell the user** (ask them to fix Serena or
      disable the serena-forge hook) rather than looping or working around it.
 
-6. **Confirm state** any time with `get_current_config` (shows the active
+8. **Wire `.gitignore` so memories are committed.** Ensure the repo ignores only
+   Serena's churny cache and keeps `project.yml` + `memories/` tracked. Append
+   this block if it isn't already present (do not clobber an existing
+   `.gitignore` — only add the missing lines):
+
+   ```gitignore
+   # Serena local state — ignore ONLY the machine-local index cache.
+   # Keep .serena/project.yml and .serena/memories/ tracked (committed memories =
+   # the persistence layer; later sessions read them instead of re-exploring).
+   .serena/cache/
+   ```
+
+   Then `git add .serena/project.yml .serena/memories/` so the onboarding output
+   is captured for the team. (Skip committing memories only if the user says
+   their memories may contain repo-sensitive detail they don't want in git.)
+
+9. **Confirm state** any time with `get_current_config` (shows the active
    project and config).
+
+## Onboarding on demand (repo not yet initialized)
+
+serena-forge is global, so you will land in repos that were never onboarded.
+Because `.cs` writes are blocked everywhere, an un-onboarded repo cannot be
+edited until this skill runs. When C# work is requested in such a repo (no
+`.serena/` folder), **propose onboarding to the user and run this skill once they
+agree** — the SessionStart banner and the write-block message both steer you
+here. Do not silently skip onboarding, and never fall back to a native `.cs`
+edit to route around the block.
 
 ## What `.serena/` contains
 

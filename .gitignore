@@ -1,6 +1,9 @@
-# Serena local state (never commit — machine-local, churny)
+# Serena local state
+# Ignore ONLY the machine-local, churny index cache. Keep .serena/project.yml AND
+# .serena/memories/ tracked: committed memories are the persistence layer (they
+# replace ~90% of the "memory" promise of graph tools — sessions read them instead
+# of re-exploring). See README "Repo housekeeping".
 .serena/cache/
-.serena/memories/
 
 # OS / editor cruft
 .DS_Store

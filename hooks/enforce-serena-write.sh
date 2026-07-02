@@ -55,6 +55,12 @@ if [[ "$file_path" != *.[cC][sS] ]]; then
   exit 0
 fi
 
+# --- Onboarding-aware guidance ----------------------------------------------
+# Resolve the session cwd (repo root) from the payload; on any jq error fall back
+# to PWD. Used only to tailor the deny message — never to change the decision.
+cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
+[[ -n "$cwd" ]] || cwd="${PWD:-.}"
+
 # --- DENY the .cs write and steer the agent to Serena's symbolic tools -------
 # Build the JSON with jq (jq is confirmed present here) so any quotes/backslashes
 # in file_path are escaped safely — no hand-rolled JSON injection risk. If jq -n
@@ -62,7 +68,14 @@ fi
 #
 # The message deliberately does NOT tell the agent how to disable the guard. When
 # Serena can't make the edit, the agent must escalate to the user, not bypass.
-reason="Editing .cs via Edit/Write/MultiEdit is blocked by serena-forge (target: ${file_path}). Edit this C# file through Serena's symbolic tools instead: inspect it with get_symbols_overview, or locate the exact target with find_symbol, then change it with replace_symbol_body, insert_after_symbol, or insert_before_symbol. If you cannot make this change through Serena — the language server is unavailable or the edit cannot be expressed symbolically — STOP and ask the user to either fix Serena or disable this hook. Do not attempt to work around this block."
+if [[ -d "$cwd/.serena" ]]; then
+  reason="Editing .cs via Edit/Write/MultiEdit is blocked by serena-forge (target: ${file_path}). Edit this C# file through Serena's symbolic tools instead: inspect it with get_symbols_overview, or locate the exact target with find_symbol, then change it with replace_symbol_body, insert_after_symbol, or insert_before_symbol. If you cannot make this change through Serena — the language server is unavailable or the edit cannot be expressed symbolically — STOP and ask the user to either fix Serena or disable this hook. Do not attempt to work around this block."
+else
+  # No .serena/ => this repo was never onboarded, so Serena's symbolic tools
+  # cannot act on it yet. Steer the agent to PROPOSE onboarding to the user
+  # rather than fall back to a native .cs write.
+  reason="Editing .cs via Edit/Write/MultiEdit is blocked by serena-forge (target: ${file_path}). This repo is NOT Serena-onboarded yet (no .serena/ folder), so Serena's symbolic edit tools cannot act on it. PROPOSE to the user that you onboard this repo now with the serena-forge-setup skill (it activates the project and indexes it), and run it once they agree — then make the change through Serena's symbolic tools (replace_symbol_body / insert_after_symbol / rename_symbol). Do NOT work around this block with a native .cs write."
+fi
 
 jq -n --arg reason "$reason" \
   '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $reason}}'

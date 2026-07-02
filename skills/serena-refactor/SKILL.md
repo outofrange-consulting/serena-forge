@@ -18,6 +18,8 @@ Native `Edit`, `Write`, and `MultiEdit` on `.cs` files are **denied globally** b
 2. **Edit** with the matching write tool (below).
 3. **Verify** with `get_diagnostics_for_symbol` (or `get_diagnostics_for_file`) to confirm the edit compiles with no new errors — then **check the git diff** (see the CRLF pitfall — this step is not optional on a corporate repos).
 
+> **Build safety net (automatic).** serena-forge queues the touched `.csproj` on every symbolic edit and runs one scoped `dotnet build --no-restore` at end of turn (`queue-build.sh` → `flush-build-queue.sh`, Stop hook). If it fails, the turn is blocked and the compiler errors are handed back to you — **fix them through Serena before finishing; a red build is unfinished work.** `get_diagnostics_*` is your fast in-loop check; the end-of-turn build is the real gate. For a wider guarantee, follow the build with the targeted tests of the modified slice (in VSA the per-slice test scope keeps this cheap). Opt out with `SERENA_FORGE_BUILD=0` only if the user asks.
+
 ## Verified Serena write tools
 
 Use only these (confirmed present). Do **not** invent tool names.

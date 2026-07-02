@@ -1,0 +1,28 @@
+{
+  "name": "serena-forge",
+  "owner": {
+    "name": "outofrange-consulting"
+  },
+  "plugins": [
+    {
+      "name": "serena-forge",
+      "source": "./",
+      "description": "Forces Serena for symbolic C# editing/refactor and adds a granular destructive-command guard.",
+      "version": "0.1.0",
+      "author": {
+        "name": "outofrange-consulting"
+      },
+      "category": "development",
+      "keywords": [
+        "serena",
+        "csharp",
+        "dotnet",
+        "roslyn",
+        "lsp",
+        "refactor",
+        "hooks",
+        "enforcement"
+      ]
+    }
+  ]
+}

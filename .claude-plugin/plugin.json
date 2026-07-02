@@ -1,8 +1,8 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "serena-forge",
-  "version": "0.1.0",
-  "description": "Forces Serena for symbolic C# editing/refactor and adds a granular destructive-command guard.",
+  "version": "0.2.0",
+  "description": "Forces Serena for symbolic C# reading/editing/refactor, compiles touched projects after edits, and adds a granular destructive-command guard.",
   "author": {
     "name": "outofrange-consulting"
   }

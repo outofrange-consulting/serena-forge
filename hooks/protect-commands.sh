@@ -24,6 +24,7 @@
 #     - git reset --hard                                 (discards working tree)
 #     - git clean -f / -fd / -fdx (any -f)               (deletes untracked files)
 #     - bulk file deletion: rm -r / rm -rf on a *path*   (recursive, non-root)
+#         EXEMPT (no ASK) when it is a routine in-tree cleanup — see below
 #     - dotnet ef database drop                          (drops the EF database)
 #     - SQL: DROP {table|database|schema|view|index}     (schema destruction)
 #     - SQL: TRUNCATE TABLE                              (empties a table)
@@ -31,6 +32,28 @@
 #     - SQL: UPDATE <t> SET ... with NO WHERE            (mutates all rows)
 #
 #   ALLOW (everything else): exit 0 silently — see "ALLOW policy" below.
+#
+# LOCAL-CLEANUP EXEMPTION  (recursive rm that we do NOT even ASK about)
+# ---------------------------------------------------------------------------
+#   A recursive rm is a routine developer cleanup — `rm -rf ./build`,
+#   `rm -rf node_modules dist`, `rm -rf .cache` — and should not nag with an
+#   ASK, but ONLY when we can statically PROVE it is confined and non-sensitive.
+#   All of the following must hold (any doubt => keep the ASK):
+#     - the shell cwd (from the PreToolUse payload's .cwd) is inside a git
+#       WORKTREE (git -C "$cwd" rev-parse --is-inside-work-tree) and is not
+#       itself a sensitive directory;
+#     - every rm target is a PLAIN, RELATIVE path (no leading / or ~, no `..`,
+#       no glob/`$`/quote/space/other shell metachar) that, resolved against
+#       cwd, stays AT OR BELOW cwd;
+#     - no resolved target is a sensitive system/home directory (Unix system
+#       trees, macOS /System//Library/..., Windows C:\Windows/Program Files/...,
+#       or the home dir and its credential/tool subdirs ~/bin ~/.ssh ~/.config
+#       ...), nor the worktree's own `.git` store;
+#     - the command contains no cd/pushd/popd/chroot (which could move the shell
+#       out from under us before the rm runs) and no sudo/doas (root delete).
+#   If ANY condition is unmet we fall back to the normal ASK. The root/home
+#   DENY rules below still run first and are unaffected. This only relaxes the
+#   ASK for provably-local cleanup — it never converts a DENY into an allow.
 #
 # ALLOW policy
 # ---------------------------------------------------------------------------
@@ -116,6 +139,12 @@ cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null |
 # Case-insensitive working copy (flags like -Rf, SQL keywords, etc.).
 cmd_lc="${cmd,,}"
 
+# Shell cwd for this tool call (same source/fallback as the other hooks). Used
+# only to relax the recursive-rm ASK for provably-local, in-tree, non-sensitive
+# targets. If it is empty/unusable the relaxation simply never applies.
+cwd_raw="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
+[[ -n "$cwd_raw" ]] || cwd_raw="${PWD:-}"
+
 # ---- pattern library --------------------------------------------------------
 # rm invoked as a command: start-of-string or a non-identifier boundary before
 # `rm` (so /bin/rm and `sudo rm` match, but `confirm`/`term` do not), then a
@@ -161,6 +190,114 @@ sql_update_re='update[[:space:]]+[^;]*[[:space:]]set[[:space:]]'
 # chained command cannot suppress the ASK on an unqualified DELETE/UPDATE.
 sql_where_re='(^|[^[:alnum:]_])where([^[:alnum:]_]|$)'
 
+# ---- Local-cleanup exemption helpers ----------------------------------------
+# See the LOCAL-CLEANUP EXEMPTION note in the header. These let a recursive rm
+# whose targets are all provably in-tree and non-sensitive skip the ASK. They
+# only ever RELAX the ASK; the DENY rules run first and are untouched.
+
+# Pure string path normalization: collapse //, /./ and a trailing / (NO symlink
+# or `..` resolution — segments containing `..` are rejected by the caller).
+_normalize_path() {
+  local p="$1"
+  [[ -z "$p" ]] && { printf '/'; return; }
+  while [[ "$p" == *//* ]]; do p="${p//\/\//\/}"; done
+  while [[ "$p" == *"/./"* ]]; do p="${p//\/.\//\/}"; done
+  p="${p%/.}"
+  [[ "$p" != "/" ]] && p="${p%/}"
+  [[ -z "$p" ]] && p="/"
+  printf '%s' "$p"
+}
+
+# Is $1 a sensitive directory we must never auto-exempt? Covers the filesystem
+# root, Unix system trees, macOS system trees, Windows system trees (native
+# c:/, git-bash /c/ and WSL /mnt/c/ forms), and the home dir plus its
+# credential/tooling subdirs (~/bin, ~/.ssh, ~/.config, ...). Case-insensitive
+# for the OS-path families.
+_is_sensitive_dir() {
+  local p="${1%/}"
+  [[ -z "$p" ]] && return 0                     # root
+  local lp="${p,,}"
+  local home="${HOME%/}"
+
+  # home directory itself, or a sensitive first-level subdir of it
+  if [[ -n "$home" && "$p" == "$home" ]]; then return 0; fi
+  if [[ -n "$home" && "$p" == "$home"/* ]]; then
+    local rest="${p#"$home"/}" first
+    first="${rest%%/*}"
+    case "${first,,}" in
+      bin|.ssh|.gnupg|.gpg|.config|.local|.aws|.kube|.docker|.azure|.gcloud|.password-store|.mozilla|.thunderbird|library|.git) return 0 ;;
+    esac
+  fi
+
+  # Unix system directories (exact or ancestor)
+  case "$p" in
+    /|/bin|/sbin|/lib|/lib32|/lib64|/libx32|/usr|/etc|/var|/opt|/boot|/dev|/proc|/sys|/run|/srv|/root|/home|/mnt|/media|/nix) return 0 ;;
+    /bin/*|/sbin/*|/lib/*|/lib32/*|/lib64/*|/libx32/*|/usr/*|/etc/*|/var/*|/boot/*|/dev/*|/proc/*|/sys/*|/run/*|/srv/*|/root/*) return 0 ;;
+  esac
+
+  # macOS system directories (case-insensitive)
+  case "$lp" in
+    /system|/system/*|/library|/library/*|/applications|/applications/*|/users|/private|/private/*|/volumes|/volumes/*|/cores|/network|/network/*) return 0 ;;
+  esac
+
+  # Windows system directories: native c:/, git-bash /c/, WSL /mnt/c/ forms
+  case "$lp" in
+    [a-z]:|[a-z]:/|[a-z]:/windows|[a-z]:/windows/*|[a-z]:/program*files*|[a-z]:/programdata|[a-z]:/programdata/*|[a-z]:/users|[a-z]:/users/*) return 0 ;;
+    /[a-z]/windows|/[a-z]/windows/*|/[a-z]/program*files*|/[a-z]/users|/[a-z]/users/*|/mnt/[a-z]/windows|/mnt/[a-z]/windows/*|/mnt/[a-z]/program*files*|/mnt/[a-z]/users|/mnt/[a-z]/users/*) return 0 ;;
+  esac
+
+  return 1
+}
+
+# Decide whether the recursive rm in RAW segment $1 is a safe local cleanup,
+# given shell cwd $2. Return 0 (safe => suppress the ASK) ONLY when every target
+# is provably in-tree and non-sensitive; any doubt => return 1 (keep the ASK).
+_rm_local_cleanup_safe() {
+  local seg="$1" cwd
+  [[ -n "$2" ]] || return 1                      # no cwd => can't judge
+  cwd="$(_normalize_path "$2")"
+  # A cd/pushd/popd/chroot anywhere on the line may move the shell before this
+  # rm runs, so the cwd we were handed may not apply — refuse to relax.
+  [[ "$cmd_lc" =~ (^|[[:space:]])(cd|pushd|popd|chroot)([[:space:]]|$) ]] && return 1
+  # Privilege elevation deletes as root — never relax.
+  [[ "$seg" =~ (^|[[:space:]])(sudo|doas)([[:space:]]|$) ]] && return 1
+  # cwd must be a real git worktree and itself non-sensitive.
+  command -v git >/dev/null 2>&1 || return 1
+  git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+  _is_sensitive_dir "$cwd" && return 1
+
+  local -a toks; read -ra toks <<< "$seg"
+  local saw_rm=0 saw_path=0 tok resolved
+  for tok in "${toks[@]}"; do
+    if [[ $saw_rm -eq 0 ]]; then
+      [[ "$tok" == "rm" || "$tok" == */rm ]] && saw_rm=1
+      continue
+    fi
+    [[ "$tok" == "--" ]] && continue
+    [[ "$tok" == -* ]] && continue               # a flag
+    # strip one layer of surrounding quotes
+    tok="${tok#\"}"; tok="${tok%\"}"
+    tok="${tok#\'}"; tok="${tok%\'}"
+    [[ -z "$tok" ]] && continue
+    saw_path=1
+    case "$tok" in
+      /*|\~*) return 1 ;;                         # absolute or home-anchored
+      *..*)   return 1 ;;                         # escapes upward
+    esac
+    # any non-plain path char (glob, $, backtick, space, ...) => can't resolve
+    [[ "$tok" == *[^A-Za-z0-9._/@+=%,-]* ]] && return 1
+    resolved="$(_normalize_path "$cwd/$tok")"
+    case "$resolved" in
+      "$cwd"|"$cwd"/*) : ;;                       # at or below cwd
+      *) return 1 ;;
+    esac
+    case "$resolved" in */.git|*/.git/*) return 1 ;; esac  # protect the git store
+    _is_sensitive_dir "$resolved" && return 1
+  done
+  [[ $saw_path -eq 1 ]] || return 1               # no concrete target => keep ASK
+  return 0
+}
+
 # ---- Per-segment scoping ----------------------------------------------------
 # Split the command on the shell separators ; & | into segments and evaluate
 # the "flag + context must co-occur" rules WITHIN a single segment. This is the
@@ -174,6 +311,11 @@ sql_where_re='(^|[^[:alnum:]_])where([^[:alnum:]_]|$)'
 # `[;&|]`-replace to newline is bash-3.2 safe. Whole-command keyword rules that
 # have no cross-segment attribution problem (fork bomb) stay whole-command.
 segmented="${cmd_lc//[;&|]/$'\n'}"
+# Same split on the ORIGINAL-case command, so the local-cleanup exemption can
+# extract and resolve rm target paths without the case-folding that would
+# corrupt case-sensitive paths (e.g. macOS ~/Library). Indices align 1:1 with
+# $segmented because both split at the same separator positions.
+segmented_raw="${cmd//[;&|]/$'\n'}"
 
 # ---- DENY (unrecoverable) ---------------------------------------------------
 # Fork bomb: a self-piping backgrounded function. Whole-command is correct here
@@ -196,12 +338,19 @@ done <<< "$segmented"
 # ---- ASK (destructive but recoverable) -------------------------------------
 # Each rule is scoped to a single segment so a destructive keyword or target in
 # a different chained command can neither trigger nor suppress it.
-while IFS= read -r seg; do
+mapfile -t _seg_lc  <<< "$segmented"
+mapfile -t _seg_raw <<< "$segmented_raw"
+for _i in "${!_seg_lc[@]}"; do
+  seg="${_seg_lc[$_i]}"
+  seg_raw="${_seg_raw[$_i]}"
+
   # Bulk / recursive file deletion on a path (root/home already denied above).
-  # Intentionally NOT allowlisting node_modules/dist/etc: an ASK is a one-click
-  # confirm and keeps the guard simple.
+  # A provably-local, in-tree, non-sensitive cleanup inside a git worktree is
+  # exempt (no ASK — defer to normal flow); everything else still confirms.
   if [[ "$seg" =~ $rm_recursive_re ]]; then
-    ask "serena-forge: recursive/bulk file deletion (rm -r/-rf on a path) - confirm the target"
+    if ! _rm_local_cleanup_safe "$seg_raw" "$cwd_raw"; then
+      ask "serena-forge: recursive/bulk file deletion (rm -r/-rf on a path) - confirm the target"
+    fi
   fi
 
   # git push --force / --force-with-lease / push -f
@@ -244,7 +393,7 @@ while IFS= read -r seg; do
   if [[ "$seg" =~ $sql_update_re ]] && [[ ! "$seg" =~ $sql_where_re ]]; then
     ask "serena-forge: UPDATE without a WHERE clause affects all rows - confirm"
   fi
-done <<< "$segmented"
+done
 
 # ---- ALLOW (default): silent exit 0, defer to normal permission flow --------
 pass

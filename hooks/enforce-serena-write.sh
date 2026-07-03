@@ -69,7 +69,7 @@ cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
 # The message deliberately does NOT tell the agent how to disable the guard. When
 # Serena can't make the edit, the agent must escalate to the user, not bypass.
 if [[ -d "$cwd/.serena" ]]; then
-  reason="Editing .cs via Edit/Write/MultiEdit is blocked by serena-forge (target: ${file_path}). Edit this C# file through Serena's symbolic tools instead: inspect it with get_symbols_overview, or locate the exact target with find_symbol, then change it with replace_symbol_body, insert_after_symbol, or insert_before_symbol. If you cannot make this change through Serena — the language server is unavailable or the edit cannot be expressed symbolically — STOP and ask the user to either fix Serena or disable this hook. Do not attempt to work around this block."
+  reason="Editing .cs via Edit/Write/MultiEdit is blocked by serena-forge (target: ${file_path}). To CREATE a new C# file, use Serena's create_text_file tool. To EDIT an existing one, use Serena's symbolic tools instead: inspect it with get_symbols_overview, or locate the exact target with find_symbol, then change it with replace_symbol_body, insert_after_symbol, or insert_before_symbol. If you cannot make this change through Serena — the language server is unavailable or the edit cannot be expressed symbolically — STOP and ask the user to either fix Serena or disable this hook. Do not attempt to work around this block."
 else
   # No .serena/ => this repo was never onboarded, so Serena's symbolic tools
   # cannot act on it yet. Steer the agent to PROPOSE onboarding to the user

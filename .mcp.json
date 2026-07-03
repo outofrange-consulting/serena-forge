@@ -10,7 +10,7 @@
         "serena",
         "start-mcp-server",
         "--context",
-        "claude-code",
+        "${CLAUDE_PLUGIN_ROOT}/contexts/serena-forge.yml",
         "--open-web-dashboard",
         "False"
       ]

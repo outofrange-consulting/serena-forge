@@ -25,6 +25,8 @@ bash serena-forge/setup/install-wsl.sh -y
 | Plugins | `serena-forge@serena-forge` (this repo — symbolic C# enforcement, build safety net, destructive-command guard, all hooks included) and `dev-team@bfinster` (**upstream** [bdfinst/agentic-dev-team](https://github.com/bdfinst/agentic-dev-team)) |
 | Skills (`~/.claude/skills`) | `caveman`, `yagni`, `atlassian` (drives `acli`), `context7` (drives `ctx7`) — mirrored from [omp-dev-team](https://github.com/outofrange-consulting/omp-dev-team)'s token-diet — plus `azure-devops` (this repo, drives `az devops`) |
 | CLI tools | `ctx-wire` (+ shims + token-diet git/dotnet filters merged as a managed block), `acli` (Atlassian CLI + auth), `az` + `azure-devops` extension (+ PAT login + org/project defaults), `ctx7` |
+| dev-team tooling | what upstream `/init-dev-team` expects: `jq` + `python3` (hard deps), **CodeGraph** (`codegraph upgrade` on re-run), plus `ast-grep`, `semgrep` (used by the `semgrep-analyze` skill) and a **global Stryker.NET** for the C# mutation gate. Stryker (JS) and pitest stay per-project by upstream design — run `/init-dev-team` inside a repo to wire those |
+| Repo indexing | prompts once for `CODE_ROOT` (your repos folder, persisted; or `--code-root=DIR`), then for every git repo under it: `codegraph init -i` first time / `codegraph sync` on re-run, merges the `codegraph serve --mcp` server into the repo's `.mcp.json` (same deep-merge as upstream — commit it so clones auto-bootstrap), and pre-indexes C# repos (`.sln`/`.csproj`) with `serena project index` to kill the Roslyn cold start |
 | MCP | Miro remote MCP (`https://mcp.miro.com`, user scope) — finish the OAuth with `/mcp` in your first session |
 | Second brain | clones [second-brain](https://github.com/outofrange-consulting/second-brain) to `~/second-brain` (or `--brain-dir=…`), renders `.mcp.json` (vault-rag MCP via `rag/launch.sh`) and `.claude/settings.json` (auto-commit / auto-push / statusline hooks) from the repo templates, `npm install` in `rag/`, RAG smoke test |
 
@@ -41,6 +43,16 @@ prompted with `read -s` (nothing echoed) and persisted to
 | `AZURE_DEVOPS_ORG`, `AZURE_DEVOPS_PROJECT` | `az devops configure --defaults` |
 | `AZURE_DEVOPS_PAT` (also persisted as `AZURE_DEVOPS_EXT_PAT`) | non-interactive `az devops` auth |
 | `ACLI_SITE`, `ACLI_EMAIL`, `ACLI_TOKEN` | `acli jira auth login` |
+| `CODE_ROOT` (plain, not secret) | root folder scanned for repos to index with CodeGraph/Serena |
+
+## Skill & tool provenance
+
+- `caveman` — port of [JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman) maintained in omp-dev-team (token-diet), not the upstream file verbatim.
+- `yagni` — original omp-dev-team skill (no external upstream).
+- `context7` + `ctx7` — the `ctx7` npm CLI is published by the Context7 team (Upstash); the skill wrapping it is omp-dev-team's CLI-over-MCP take.
+- `atlassian` — omp-dev-team skill driving the official Atlassian `acli`.
+- `azure-devops` — authored in this repo, drives the official `az` CLI `azure-devops` extension (Boards, Repos/PRs — create/vote/complete/checkout, Pipelines).
+- CodeGraph — [colbymchenry/codegraph](https://github.com/colbymchenry/codegraph), the tool upstream dev-team's `/init-dev-team` and its `codegraph-bootstrap` SessionStart hook expect.
 
 ## PATH — non-interactive shells included
 
@@ -61,7 +73,8 @@ and warns if the wiring didn't take.
 -y, --yes         never prompt (skip missing secrets with a warning)
 --no-update       keep already-installed tools as-is
 --brain-dir=DIR   second brain location (default ~/second-brain)
---skip-brain --skip-az --skip-acli --skip-miro --skip-dotnet
+--code-root=DIR   repos folder for CodeGraph/Serena indexing (else prompted)
+--skip-brain --skip-az --skip-acli --skip-miro --skip-dotnet --skip-index
 ```
 
 ## After the first run

@@ -15,6 +15,10 @@
 #                     (this repo, drives `az devops`)
 #   CLI tools       : ctx-wire (+ shims + git/dotnet filters), acli (Atlassian),
 #                     az + azure-devops extension, ctx7 (docs CLI)
+#   dev-team tooling: CodeGraph, ast-grep, semgrep, Stryker.NET (global) —
+#                     Stryker JS / pitest stay per-project (/init-dev-team)
+#   Repo indexing   : asks for a code root, then per repo: codegraph init/sync
+#                     (+ per-repo .mcp.json) and `serena project index` on C#
 #   MCP             : Miro remote MCP (OAuth via /mcp in-session)
 #   Second brain    : clones outofrange-consulting/second-brain, renders
 #                     .mcp.json / .claude/settings.json (vault-rag MCP +
@@ -37,19 +41,22 @@
 #                    with a warning, auth steps that need them are deferred)
 #   --no-update      keep tools that are already installed (don't refresh)
 #   --brain-dir=DIR  where the second brain lives (default: ~/second-brain)
-#   --skip-brain / --skip-az / --skip-acli / --skip-miro / --skip-dotnet
-#                    skip that component entirely
+#   --code-root=DIR  root folder of your repos for CodeGraph/Serena indexing
+#                    (also via CODE_ROOT env; prompted once and persisted)
+#   --skip-brain / --skip-az / --skip-acli / --skip-miro / --skip-dotnet /
+#   --skip-index     skip that component entirely
 #   -h, --help       this help
 set -euo pipefail
 
-YES=0; NO_UPDATE=0; SKIP_BRAIN=0; SKIP_AZ=0; SKIP_ACLI=0; SKIP_MIRO=0; SKIP_DOTNET=0
+YES=0; NO_UPDATE=0; SKIP_BRAIN=0; SKIP_AZ=0; SKIP_ACLI=0; SKIP_MIRO=0; SKIP_DOTNET=0; SKIP_INDEX=0
 BRAIN_DIR="${SECOND_BRAIN_DIR:-$HOME/second-brain}"
 for a in "$@"; do case "$a" in
   -y|--yes) YES=1 ;;
   --no-update) NO_UPDATE=1 ;;
   --brain-dir=*) BRAIN_DIR="${a#*=}" ;;
+  --code-root=*) CODE_ROOT="${a#*=}" ;;
   --skip-brain) SKIP_BRAIN=1 ;; --skip-az) SKIP_AZ=1 ;; --skip-acli) SKIP_ACLI=1 ;;
-  --skip-miro) SKIP_MIRO=1 ;; --skip-dotnet) SKIP_DOTNET=1 ;;
+  --skip-miro) SKIP_MIRO=1 ;; --skip-dotnet) SKIP_DOTNET=1 ;; --skip-index) SKIP_INDEX=1 ;;
   -h|--help) sed -n '2,48p' "$0"; exit 0 ;;
   *) echo "unknown arg: $a" >&2; exit 2 ;;
 esac; done
@@ -207,25 +214,28 @@ ensure_gh() {  # dev-team (upstream) requires gh; also used to clone private rep
 # ---------------------------------------------------------------------------
 node_major() { node --version 2>/dev/null | sed 's/^v//; s/\..*//' || echo 0; }
 
+# Global npm installs (ctx7, ast-grep, codegraph…) must land on PATH
+# (~/.local/bin), not inside the versioned node dir.
+ensure_npm_prefix() { have npm && npm config set prefix "$HOME/.local" >/dev/null 2>&1 || true; }
+
 ensure_node() {  # second-brain RAG needs Node >= 20 (better-sqlite3, tsx)
   if have node && [ "$(node_major)" -ge 20 ] && [ "$NO_UPDATE" = 1 ]; then
-    ok "node $(node --version)"; return
+    ensure_npm_prefix; ok "node $(node --version)"; return
   fi
   say "Installing/updating Node.js (LTS) into ~/.local"
   local os arch ver file url tmp dir b
   case "$(uname -m)" in x86_64|amd64) arch=x64 ;; aarch64|arm64) arch=arm64 ;; *) warn "unsupported arch for auto Node"; return ;; esac
   os=linux
   ver="$(curl -fsSL https://nodejs.org/dist/index.json 2>/dev/null | tr '}' '\n' | grep -m1 '"lts":"' | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
-  [ -n "$ver" ] || { warn "could not resolve Node LTS version"; return; }
-  if have node && [ "$(node --version)" = "$ver" ]; then ok "node $ver (already latest LTS)"; return; fi
+  [ -n "$ver" ] || { warn "could not resolve Node LTS version"; ensure_npm_prefix; return; }
+  if have node && [ "$(node --version)" = "$ver" ]; then ensure_npm_prefix; ok "node $ver (already latest LTS)"; return; fi
   file="node-${ver}-${os}-${arch}.tar.gz"; url="https://nodejs.org/dist/${ver}/${file}"
   tmp="$(mktemp -d)"
   if curl -fsSL "$url" -o "$tmp/node.tgz" && tar -xzf "$tmp/node.tgz" -C "$HOME/.local"; then
     dir="$HOME/.local/${file%.tar.gz}"
     for b in node npm npx corepack; do [ -e "$dir/bin/$b" ] && ln -sf "$dir/bin/$b" "$HOME/.local/bin/$b"; done
     hash -r 2>/dev/null || true
-    # Global npm installs (ctx7…) must land on PATH, not in the versioned dir.
-    npm config set prefix "$HOME/.local" >/dev/null 2>&1 || true
+    ensure_npm_prefix
     ok "node $(node --version)"
   else
     warn "Node download failed — install manually from https://nodejs.org"
@@ -441,6 +451,111 @@ ensure_az_devops() {
 }
 
 # ---------------------------------------------------------------------------
+# dev-team tooling — what upstream /init-dev-team expects on the machine:
+# jq + python3 (apt above), CodeGraph, plus ast-grep, semgrep (semgrep-analyze
+# skill) and a global Stryker.NET for the C# mutation gate. Stryker (JS) and
+# pitest stay PER-PROJECT by upstream design (npm dev-dep / build-file edit) —
+# run /init-dev-team inside a repo to wire those.
+# ---------------------------------------------------------------------------
+ensure_codegraph() {
+  if have codegraph; then
+    [ "$NO_UPDATE" = 1 ] || { say "Updating CodeGraph"; codegraph upgrade >/dev/null 2>&1 || true; }
+  else
+    say "Installing CodeGraph"
+    if have npm; then npm install -g @colbymchenry/codegraph >/dev/null 2>&1 || true; fi
+    have codegraph || curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | sh || true
+    hash -r 2>/dev/null || true
+  fi
+  have codegraph && ok "codegraph $(codegraph --version 2>/dev/null | head -1)" \
+    || warn "codegraph install failed — https://github.com/colbymchenry/codegraph"
+}
+
+ensure_ast_grep() {
+  have npm || { warn "npm missing — skipping ast-grep"; return 0; }
+  if have ast-grep && [ "$NO_UPDATE" = 1 ]; then ok "ast-grep $(ast-grep --version 2>/dev/null)"; return; fi
+  say "Installing/updating ast-grep"
+  npm install -g @ast-grep/cli@latest >/dev/null 2>&1 \
+    && ok "ast-grep $(ast-grep --version 2>/dev/null)" || warn "ast-grep install failed"
+}
+
+ensure_semgrep() {
+  have pipx || { warn "pipx missing — skipping semgrep"; return 0; }
+  if have semgrep; then
+    [ "$NO_UPDATE" = 1 ] || pipx upgrade semgrep >/dev/null 2>&1 || true
+  else
+    say "Installing semgrep (dev-team semgrep-analyze skill)"
+    pipx install semgrep >/dev/null 2>&1 || { warn "semgrep install failed"; return 0; }
+  fi
+  ok "semgrep $(semgrep --version 2>/dev/null | head -1)"
+}
+
+ensure_stryker_dotnet() {  # C# mutation gate — global so it works in any repo
+  have dotnet || return 0
+  if dotnet tool list --global 2>/dev/null | grep -q dotnet-stryker; then
+    [ "$NO_UPDATE" = 1 ] || dotnet tool update --global dotnet-stryker >/dev/null 2>&1 || true
+    ok "dotnet-stryker (global)"
+  else
+    say "Installing Stryker.NET (global dotnet tool)"
+    dotnet tool install --global dotnet-stryker >/dev/null 2>&1 \
+      && ok "dotnet-stryker installed" || warn "dotnet-stryker install failed"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Repo indexing — asks for a code root, then per git repo under it:
+#   * CodeGraph: `codegraph init -i` (first time) / `codegraph sync` (re-run),
+#     and merges the upstream `codegraph serve --mcp` server into the repo's
+#     .mcp.json (same deep-merge as upstream /init-dev-team — commit it with
+#     .codegraph/.gitignore so clones auto-bootstrap).
+#   * Serena: `serena project index` on repos with a .sln/.csproj (kills the
+#     first-find_symbol Roslyn cold start; .NET 10 only — failures are warned,
+#     never fatal).
+# ---------------------------------------------------------------------------
+merge_codegraph_mcp() {  # merge_codegraph_mcp <repo>
+  local repo="$1" mcp="$1/.mcp.json" tmp
+  have jq || return 0
+  local block='{"mcpServers":{"codegraph":{"type":"stdio","command":"codegraph","args":["serve","--mcp"]}}}'
+  if [ -f "$mcp" ]; then
+    jq -e '.mcpServers.codegraph' "$mcp" >/dev/null 2>&1 && return 0
+    if tmp="$(mktemp)" && jq --argjson add "$block" '. * $add' "$mcp" > "$tmp" 2>/dev/null; then
+      mv -f "$tmp" "$mcp"
+    else rm -f "${tmp:-}"; warn "  could not merge $mcp — left unchanged"; return 0; fi
+  else
+    printf '%s\n' "$block" | jq . > "$mcp"
+  fi
+}
+
+index_repos() {
+  [ "$SKIP_INDEX" = 1 ] && return 0
+  say "Repo indexing (CodeGraph + Serena)"
+  if ! require_var CODE_ROOT "Root folder containing your git repos (e.g. ~/code — Enter to skip indexing)" plain; then
+    return 0
+  fi
+  local root="${CODE_ROOT/#\~/$HOME}"
+  [ -d "$root" ] || { warn "CODE_ROOT does not exist: $root — skipping indexing"; return 0; }
+  local gitdir repo count=0
+  while IFS= read -r gitdir; do
+    repo="$(dirname "$gitdir")"; count=$((count + 1))
+    say "Indexing $repo"
+    if have codegraph; then
+      if [ -d "$repo/.codegraph" ]; then
+        (cd "$repo" && codegraph sync >/dev/null 2>&1) && ok "  codegraph sync" || warn "  codegraph sync failed"
+      else
+        (cd "$repo" && codegraph init -i >/dev/null 2>&1) && { ok "  codegraph init"; merge_codegraph_mcp "$repo"; } \
+          || warn "  codegraph init failed"
+      fi
+    fi
+    if have uvx && [ -n "$(find "$repo" -maxdepth 3 \( -name '*.sln' -o -name '*.csproj' \) -not -path '*/bin/*' -not -path '*/obj/*' -print -quit 2>/dev/null)" ]; then
+      say "  serena project index (Roslyn — can take a while on first run)"
+      uvx -p 3.13 --from git+https://github.com/oraios/serena \
+        serena project index "$repo" >/dev/null 2>&1 \
+        && ok "  serena index" || warn "  serena index failed (.NET 9 target? LSP cold start?)"
+    fi
+  done < <(find "$root" -maxdepth 3 -name .git \( -type d -o -type f \) -not -path '*/node_modules/*' 2>/dev/null)
+  [ "$count" = 0 ] && warn "no git repos found under $root" || ok "$count repo(s) processed"
+}
+
+# ---------------------------------------------------------------------------
 # Miro MCP (remote, OAuth completed in-session via /mcp)
 # ---------------------------------------------------------------------------
 ensure_miro() {
@@ -550,6 +665,9 @@ doctor() {
   check dotnet   optional "dotnet --version"
   check ctx-wire optional "ctx-wire --version"
   check ctx7     optional
+  check codegraph optional "codegraph --version"
+  check ast-grep optional "ast-grep --version"
+  check semgrep  optional "semgrep --version"
   check acli     optional "acli --version"
   check az       optional
   # Fresh-login-shell visibility: catches PATH wiring that only lives in this
@@ -581,10 +699,15 @@ ensure_plugins
 ensure_skills
 ensure_ctx_wire
 ensure_ctx7
+ensure_codegraph
+ensure_ast_grep
+ensure_semgrep
+ensure_stryker_dotnet
 ensure_acli
 ensure_az_devops
 ensure_miro
 ensure_second_brain
+index_repos
 doctor || true
 
 echo

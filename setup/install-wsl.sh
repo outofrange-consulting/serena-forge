@@ -10,8 +10,10 @@
 #   Claude Code     : native installer, `claude update` on re-run
 #   Plugins         : serena-forge (this repo's marketplace, hooks included)
 #                     dev-team@bfinster (upstream bdfinst/agentic-dev-team)
-#   Skills (~/.claude/skills) : caveman, yagni, atlassian (acli), context7
-#                     (from outofrange-consulting/omp-dev-team) + azure-devops
+#                     caveman@caveman (upstream JuliusBrussee/caveman)
+#                     ponytail@ponytail (upstream DietrichGebert/ponytail)
+#   Skills (~/.claude/skills) : atlassian (acli), context7 (from
+#                     outofrange-consulting/omp-dev-team) + azure-devops
 #                     (this repo, drives `az devops`)
 #   CLI tools       : ctx-wire (+ shims + git/dotnet filters), acli (Atlassian),
 #                     az + azure-devops extension, ctx7 (docs CLI)
@@ -57,7 +59,7 @@ for a in "$@"; do case "$a" in
   --code-root=*) CODE_ROOT="${a#*=}" ;;
   --skip-brain) SKIP_BRAIN=1 ;; --skip-az) SKIP_AZ=1 ;; --skip-acli) SKIP_ACLI=1 ;;
   --skip-miro) SKIP_MIRO=1 ;; --skip-dotnet) SKIP_DOTNET=1 ;; --skip-index) SKIP_INDEX=1 ;;
-  -h|--help) sed -n '2,48p' "$0"; exit 0 ;;
+  -h|--help) sed -n '2,50p' "$0"; exit 0 ;;
   *) echo "unknown arg: $a" >&2; exit 2 ;;
 esac; done
 
@@ -325,6 +327,8 @@ ensure_plugins() {
   say "Claude Code plugins"
   ensure_plugin "$GH_ORG/serena-forge"       serena-forge serena-forge
   ensure_plugin "bdfinst/agentic-dev-team"   bfinster     dev-team
+  ensure_plugin "JuliusBrussee/caveman"      caveman      caveman
+  ensure_plugin "DietrichGebert/ponytail"    ponytail     ponytail
 }
 
 # ---------------------------------------------------------------------------
@@ -340,12 +344,18 @@ install_skill() {  # install_skill <src-dir> <name>
 
 ensure_skills() {
   say "Skills"
-  local td="$SRC_DIR/omp-dev-team/plugins/token-diet/skills"
-  install_skill "$td/caveman"   caveman
-  install_skill "$td/yagni"     yagni
+  local td="$SRC_DIR/omp-dev-team/plugins/token-diet/skills" s
   install_skill "$td/atlassian" atlassian
   install_skill "$td/context7"  context7
   install_skill "$ROOT/setup/skills/azure-devops" azure-devops
+  # caveman/yagni used to be mirrored here; they now come from the upstream
+  # plugins (caveman@caveman, ponytail@ponytail) — drop stale copies so the
+  # plugin versions are the only ones loaded.
+  for s in caveman yagni; do
+    if [ -d "$HOME/.claude/skills/$s" ]; then
+      rm -rf "$HOME/.claude/skills/$s"; ok "removed stale mirrored skill $s (now a plugin)"
+    fi
+  done
 }
 
 # ---------------------------------------------------------------------------

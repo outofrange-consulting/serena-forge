@@ -22,8 +22,8 @@ bash serena-forge/setup/install-wsl.sh -y
 | Base deps | `git curl jq unzip zip build-essential python3 pipx` (apt), GitHub CLI `gh` (+ `gh auth login` if needed — required by dev-team and to clone the private repos) |
 | Runtimes | Node LTS (`~/.local`), `uv`/`uvx` (Serena launcher), .NET 10 SDK (`~/.dotnet`, Serena's Roslyn backend — .NET 9 is not supported) |
 | Claude Code | native installer; `claude update` on re-run |
-| Plugins | `serena-forge@serena-forge` (this repo — symbolic C# enforcement, build safety net, destructive-command guard, all hooks included) and `dev-team@bfinster` (**upstream** [bdfinst/agentic-dev-team](https://github.com/bdfinst/agentic-dev-team)) |
-| Skills (`~/.claude/skills`) | `caveman`, `yagni`, `atlassian` (drives `acli`), `context7` (drives `ctx7`) — mirrored from [omp-dev-team](https://github.com/outofrange-consulting/omp-dev-team)'s token-diet — plus `azure-devops` (this repo, drives `az devops`) |
+| Plugins | `serena-forge@serena-forge` (this repo — symbolic C# enforcement, build safety net, destructive-command guard, all hooks included), `dev-team@bfinster` (**upstream** [bdfinst/agentic-dev-team](https://github.com/bdfinst/agentic-dev-team)), `caveman@caveman` (**upstream** [JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman)) and `ponytail@ponytail` (**upstream** [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail) — the YAGNI / laziest-senior-dev discipline) |
+| Skills (`~/.claude/skills`) | `atlassian` (drives `acli`), `context7` (drives `ctx7`) — mirrored from [omp-dev-team](https://github.com/outofrange-consulting/omp-dev-team)'s token-diet — plus `azure-devops` (this repo, drives `az devops`). Stale `caveman`/`yagni` mirrors from earlier runs are removed (they're upstream plugins now) |
 | CLI tools | `ctx-wire` (+ shims + token-diet git/dotnet filters merged as a managed block), `acli` (Atlassian CLI + auth), `az` + `azure-devops` extension (+ PAT login + org/project defaults), `ctx7` |
 | dev-team tooling | what upstream `/init-dev-team` expects: `jq` + `python3` (hard deps), **CodeGraph** (`codegraph upgrade` on re-run), plus `ast-grep`, `semgrep` (used by the `semgrep-analyze` skill) and a **global Stryker.NET** for the C# mutation gate. Stryker (JS) and pitest stay per-project by upstream design — run `/init-dev-team` inside a repo to wire those |
 | Repo indexing | prompts once for `CODE_ROOT` (your repos folder, persisted; or `--code-root=DIR`), then for every git repo under it: `codegraph init -i` first time / `codegraph sync` on re-run, merges the `codegraph serve --mcp` server into the repo's `.mcp.json` (same deep-merge as upstream — commit it so clones auto-bootstrap), and pre-indexes C# repos (`.sln`/`.csproj`) with `serena project index` to kill the Roslyn cold start |
@@ -47,8 +47,8 @@ prompted with `read -s` (nothing echoed) and persisted to
 
 ## Skill & tool provenance
 
-- `caveman` — port of [JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman) maintained in omp-dev-team (token-diet), not the upstream file verbatim.
-- `yagni` — original omp-dev-team skill (no external upstream).
+- `caveman` — installed as the **upstream plugin** `caveman@caveman` ([JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman)), auto-updated via its marketplace.
+- `ponytail` — installed as the **upstream plugin** `ponytail@ponytail` ([DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail)); this is the upstream of what token-diet shipped as `yagni`.
 - `context7` + `ctx7` — the `ctx7` npm CLI is published by the Context7 team (Upstash); the skill wrapping it is omp-dev-team's CLI-over-MCP take.
 - `atlassian` — omp-dev-team skill driving the official Atlassian `acli`.
 - `azure-devops` — authored in this repo, drives the official `az` CLI `azure-devops` extension (Boards, Repos/PRs — create/vote/complete/checkout, Pipelines).

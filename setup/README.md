@@ -26,7 +26,7 @@ bash serena-forge/setup/install-wsl.sh -y
 | Skills (`~/.claude/skills`) | `atlassian` (drives `acli`), `context7` (drives `ctx7`) — mirrored from [omp-dev-team](https://github.com/outofrange-consulting/omp-dev-team)'s token-diet — plus `azure-devops` (this repo, drives `az devops`). Stale `caveman`/`yagni` mirrors from earlier runs are removed (they're upstream plugins now) |
 | CLI tools | `ctx-wire` (+ shims + token-diet git/dotnet filters merged as a managed block), `acli` (Atlassian CLI + auth), `az` + `azure-devops` extension (+ PAT login + org/project defaults), `ctx7` |
 | dev-team tooling | what upstream `/init-dev-team` expects: `jq` + `python3` (hard deps), **CodeGraph** (`codegraph upgrade` on re-run), plus `ast-grep`, `semgrep` (used by the `semgrep-analyze` skill) and a **global Stryker.NET** for the C# mutation gate. Stryker (JS) and pitest stay per-project by upstream design — run `/init-dev-team` inside a repo to wire those |
-| Repo indexing | prompts once for `CODE_ROOT` (your repos folder, persisted; or `--code-root=DIR`), then for every git repo under it: `codegraph init -i` first time / `codegraph sync` on re-run, merges the `codegraph serve --mcp` server into the repo's `.mcp.json` (same deep-merge as upstream — commit it so clones auto-bootstrap), and pre-indexes C# repos (`.sln`/`.csproj`) with `serena project index` to kill the Roslyn cold start |
+| Repo indexing | prompts once for `CODE_ROOT` (your repos folder, persisted; or `--code-root=DIR`). **CodeGraph indexes the root itself** — one cross-repo graph (`codegraph init -i` first time, `codegraph sync` on re-run), served to every session by a **user-scope MCP server** (`codegraph`, via the `~/.local/bin/codegraph-root` wrapper) and advertised by a managed block in `~/.claude/CLAUDE.md`. **Serena indexes per repo**: every C# repo (`.sln`/`.csproj`) under the root gets `serena project index` to kill the Roslyn cold start |
 | MCP | Miro remote MCP (`https://mcp.miro.com`, user scope) — finish the OAuth with `/mcp` in your first session |
 | Second brain | clones [second-brain](https://github.com/outofrange-consulting/second-brain) to `~/second-brain` (or `--brain-dir=…`), renders `.mcp.json` (vault-rag MCP via `rag/launch.sh`) and `.claude/settings.json` (auto-commit / auto-push / statusline hooks) from the repo templates, `npm install` in `rag/`, RAG smoke test |
 
@@ -76,6 +76,25 @@ and warns if the wiring didn't take.
 --code-root=DIR   repos folder for CodeGraph/Serena indexing (else prompted)
 --skip-brain --skip-az --skip-acli --skip-miro --skip-dotnet --skip-index
 ```
+
+## Design note — root-level CodeGraph without patching dev-team
+
+CodeGraph lives at `CODE_ROOT` (one cross-repo graph), Serena in each repo.
+**No transformation pass over dev-team updates is needed**, because dev-team's
+per-repo CodeGraph integration is opt-in and fail-open:
+
+- `codegraph_bootstrap` (SessionStart) only acts when the *repo's* `.mcp.json`
+  references a codegraph server — we never write one, so it stays silent;
+- `codegraph_nudge` (PreToolUse) keys on a repo-local `.codegraph/` sentinel —
+  absent, so no nudge fires (the managed `~/.claude/CLAUDE.md` block carries
+  the routing hint instead);
+- `codegraph_turn_mark` matches `mcp__codegraph__*` tool names — which is
+  exactly what the user-scope root server exposes, so it keeps working.
+
+Nothing in the plugin cache is modified, so `claude plugin update dev-team`
+can never revert this setup. (A patch-the-cache pipeline would have broken on
+the very last upstream release, which rewrote these hooks from bash to
+Python.)
 
 ## After the first run
 

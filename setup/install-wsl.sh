@@ -19,8 +19,9 @@
 #                     az + azure-devops extension, ctx7 (docs CLI)
 #   dev-team tooling: CodeGraph, ast-grep, semgrep, Stryker.NET (global) —
 #                     Stryker JS / pitest stay per-project (/init-dev-team)
-#   Repo indexing   : asks for a code root, then per repo: codegraph init/sync
-#                     (+ per-repo .mcp.json) and `serena project index` on C#
+#   Repo indexing   : asks for a code root; ONE CodeGraph graph at that root
+#                     (cross-repo, served by a user-scope MCP server) and
+#                     `serena project index` per C# repo under it
 #   MCP             : Miro remote MCP (OAuth via /mcp in-session)
 #   Second brain    : clones outofrange-consulting/second-brain, renders
 #                     .mcp.json / .claude/settings.json (vault-rag MCP +
@@ -59,7 +60,7 @@ for a in "$@"; do case "$a" in
   --code-root=*) CODE_ROOT="${a#*=}" ;;
   --skip-brain) SKIP_BRAIN=1 ;; --skip-az) SKIP_AZ=1 ;; --skip-acli) SKIP_ACLI=1 ;;
   --skip-miro) SKIP_MIRO=1 ;; --skip-dotnet) SKIP_DOTNET=1 ;; --skip-index) SKIP_INDEX=1 ;;
-  -h|--help) sed -n '2,50p' "$0"; exit 0 ;;
+  -h|--help) sed -n '2,51p' "$0"; exit 0 ;;
   *) echo "unknown arg: $a" >&2; exit 2 ;;
 esac; done
 
@@ -512,57 +513,103 @@ ensure_stryker_dotnet() {  # C# mutation gate — global so it works in any repo
 }
 
 # ---------------------------------------------------------------------------
-# Repo indexing — asks for a code root, then per git repo under it:
-#   * CodeGraph: `codegraph init -i` (first time) / `codegraph sync` (re-run),
-#     and merges the upstream `codegraph serve --mcp` server into the repo's
-#     .mcp.json (same deep-merge as upstream /init-dev-team — commit it with
-#     .codegraph/.gitignore so clones auto-bootstrap).
+# Repo indexing — CodeGraph at the CODE ROOT (one cross-repo graph), Serena
+# per repo.
+#
+#   * CodeGraph: ONE index at $CODE_ROOT (`codegraph init -i` first time,
+#     `codegraph sync` on re-run) covering every repo under it — the
+#     cross-repo exploration case a per-repo graph can't answer. Served to
+#     every Claude Code session by a USER-scope MCP server (`codegraph`)
+#     through the ~/.local/bin/codegraph-root wrapper, which cd's to the
+#     root before `codegraph serve --mcp`.
+#
+#     No dev-team transformation pass is needed: dev-team's per-repo
+#     CodeGraph wiring is opt-in and fail-open — codegraph_bootstrap only
+#     acts when the REPO's .mcp.json references codegraph, and the
+#     codegraph_nudge sentinel is a repo-local .codegraph/ dir. We create
+#     neither, so those hooks stay dormant; the mcp__codegraph__* tools
+#     (root graph) are still exposed in every session, and dev-team's
+#     turn-mark hook matches them as-is. Plugin updates can never revert
+#     this, because we never touch the plugin cache. The routing note that
+#     replaces the nudge lives in a managed ~/.claude/CLAUDE.md block.
+#
 #   * Serena: `serena project index` on repos with a .sln/.csproj (kills the
-#     first-find_symbol Roslyn cold start; .NET 10 only — failures are warned,
-#     never fatal).
+#     first-find_symbol Roslyn cold start; .NET 10 only — failures are
+#     warned, never fatal).
 # ---------------------------------------------------------------------------
-merge_codegraph_mcp() {  # merge_codegraph_mcp <repo>
-  local repo="$1" mcp="$1/.mcp.json" tmp
-  have jq || return 0
-  local block='{"mcpServers":{"codegraph":{"type":"stdio","command":"codegraph","args":["serve","--mcp"]}}}'
-  if [ -f "$mcp" ]; then
-    jq -e '.mcpServers.codegraph' "$mcp" >/dev/null 2>&1 && return 0
-    if tmp="$(mktemp)" && jq --argjson add "$block" '. * $add' "$mcp" > "$tmp" 2>/dev/null; then
-      mv -f "$tmp" "$mcp"
-    else rm -f "${tmp:-}"; warn "  could not merge $mcp — left unchanged"; return 0; fi
-  else
-    printf '%s\n' "$block" | jq . > "$mcp"
+register_codegraph_root() {  # register_codegraph_root <root>
+  local root="$1" wrapper="$HOME/.local/bin/codegraph-root"
+  cat > "$wrapper" <<EOF
+#!/bin/sh
+# Managed by serena-forge setup/install-wsl.sh — regenerated on every run.
+# Serves the CODE_ROOT-level CodeGraph index to every Claude Code session.
+cd "$root" || exit 1
+exec codegraph serve --mcp
+EOF
+  chmod +x "$wrapper"
+  if have claude && ! claude mcp get codegraph >/dev/null 2>&1; then
+    claude mcp add -s user codegraph -- "$wrapper" >/dev/null 2>&1 \
+      && ok "codegraph MCP registered (user scope, root graph)" \
+      || warn "codegraph MCP registration failed — run: claude mcp add -s user codegraph -- $wrapper"
   fi
+}
+
+# Managed block in ~/.claude/CLAUDE.md replaced in place on every run — this
+# is the root-graph counterpart of dev-team's per-repo codegraph nudge.
+write_codegraph_claude_md() {  # write_codegraph_claude_md <root>
+  local root="$1" md="$HOME/.claude/CLAUDE.md" tmp
+  local b="<!-- >>> serena-forge setup: codegraph root >>> -->" e="<!-- <<< serena-forge setup: codegraph root <<< -->"
+  mkdir -p "$(dirname "$md")"; touch "$md"
+  tmp="$(mktemp)"
+  awk -v b="$b" -v e="$e" '$0==b{skip=1} !skip{print} $0==e{skip=0}' "$md" > "$tmp"
+  {
+    cat "$tmp"
+    printf '\n%s\n' "$b"
+    cat <<EOF
+## CodeGraph (root graph)
+A user-scope \`codegraph\` MCP server indexes ALL repos under \`$root\`
+(one cross-repo graph). Prefer \`mcp__codegraph__*\` tools (context/explore)
+for multi-file or cross-repo exploration; Read/Grep/Glob for confirming a
+specific detail. For C# symbol work in the current repo, Serena remains the
+source of truth (serena-forge).
+EOF
+    printf '%s\n' "$e"
+  } > "$md"
+  rm -f "$tmp"
+  ok "root-graph routing note written to ~/.claude/CLAUDE.md (managed block)"
 }
 
 index_repos() {
   [ "$SKIP_INDEX" = 1 ] && return 0
-  say "Repo indexing (CodeGraph + Serena)"
+  say "Repo indexing (CodeGraph at the root + Serena per repo)"
   if ! require_var CODE_ROOT "Root folder containing your git repos (e.g. ~/code — Enter to skip indexing)" plain; then
     return 0
   fi
   local root="${CODE_ROOT/#\~/$HOME}"
   [ -d "$root" ] || { warn "CODE_ROOT does not exist: $root — skipping indexing"; return 0; }
+
+  if have codegraph; then
+    if [ -d "$root/.codegraph" ]; then
+      say "CodeGraph: syncing the root graph ($root)"
+      (cd "$root" && codegraph sync >/dev/null 2>&1) && ok "codegraph sync" || warn "codegraph sync failed"
+    else
+      say "CodeGraph: building the root graph ($root — first run can take a while)"
+      (cd "$root" && codegraph init -i >/dev/null 2>&1) && ok "codegraph init" || warn "codegraph init failed"
+    fi
+    [ -d "$root/.codegraph" ] && { register_codegraph_root "$root"; write_codegraph_claude_md "$root"; }
+  fi
+
   local gitdir repo count=0
   while IFS= read -r gitdir; do
     repo="$(dirname "$gitdir")"; count=$((count + 1))
-    say "Indexing $repo"
-    if have codegraph; then
-      if [ -d "$repo/.codegraph" ]; then
-        (cd "$repo" && codegraph sync >/dev/null 2>&1) && ok "  codegraph sync" || warn "  codegraph sync failed"
-      else
-        (cd "$repo" && codegraph init -i >/dev/null 2>&1) && { ok "  codegraph init"; merge_codegraph_mcp "$repo"; } \
-          || warn "  codegraph init failed"
-      fi
-    fi
     if have uvx && [ -n "$(find "$repo" -maxdepth 3 \( -name '*.sln' -o -name '*.csproj' \) -not -path '*/bin/*' -not -path '*/obj/*' -print -quit 2>/dev/null)" ]; then
-      say "  serena project index (Roslyn — can take a while on first run)"
+      say "Serena: indexing $repo (Roslyn — can take a while on first run)"
       uvx -p 3.13 --from git+https://github.com/oraios/serena \
         serena project index "$repo" >/dev/null 2>&1 \
         && ok "  serena index" || warn "  serena index failed (.NET 9 target? LSP cold start?)"
     fi
   done < <(find "$root" -maxdepth 3 -name .git \( -type d -o -type f \) -not -path '*/node_modules/*' 2>/dev/null)
-  [ "$count" = 0 ] && warn "no git repos found under $root" || ok "$count repo(s) processed"
+  [ "$count" = 0 ] && warn "no git repos found under $root" || ok "$count repo(s) scanned (Serena on C# repos)"
 }
 
 # ---------------------------------------------------------------------------

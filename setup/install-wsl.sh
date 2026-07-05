@@ -17,7 +17,8 @@
 #                     (this repo, drives `az devops`)
 #   CLI tools       : ctx-wire (+ shims + git/dotnet filters), acli (Atlassian),
 #                     az + azure-devops extension, ctx7 (docs CLI),
-#                     agent-of-empires (aoe — multi-agent tmux manager)
+#                     agent-of-empires (aoe — multi-agent tmux manager),
+#                     Docker Engine (native WSL — no Docker Desktop)
 #   dev-team tooling: CodeGraph, ast-grep, semgrep, Stryker.NET (global) —
 #                     Stryker JS / pitest stay per-project (/init-dev-team)
 #   Repo indexing   : asks for a code root; ONE CodeGraph graph at that root
@@ -61,7 +62,7 @@ for a in "$@"; do case "$a" in
   --code-root=*) CODE_ROOT="${a#*=}" ;;
   --skip-brain) SKIP_BRAIN=1 ;; --skip-az) SKIP_AZ=1 ;; --skip-acli) SKIP_ACLI=1 ;;
   --skip-miro) SKIP_MIRO=1 ;; --skip-dotnet) SKIP_DOTNET=1 ;; --skip-index) SKIP_INDEX=1 ;;
-  -h|--help) sed -n '2,52p' "$0"; exit 0 ;;
+  -h|--help) sed -n '2,53p' "$0"; exit 0 ;;
   *) echo "unknown arg: $a" >&2; exit 2 ;;
 esac; done
 
@@ -425,6 +426,37 @@ ensure_ctx_wire() {
   ok "ctx-wire $(ctx-wire --version 2>/dev/null | head -1)"
 }
 
+ensure_docker() {  # native Docker Engine in WSL (no Docker Desktop, no podman)
+  if have docker; then
+    [ "$NO_UPDATE" = 1 ] || apt_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    ok "docker $(docker --version 2>/dev/null | head -1)"
+  else
+    say "Installing Docker Engine (native, official apt repo)"
+    sudo install -dm755 /etc/apt/keyrings 2>/dev/null || true
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+      | sudo gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg 2>/dev/null || true
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+      | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null || true
+    APT_UPDATED=0
+    apt_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    have docker || { warn "docker install failed — https://docs.docker.com/engine/install/ubuntu/"; return 0; }
+    ok "docker $(docker --version 2>/dev/null | head -1)"
+  fi
+  # Rootless-ish comfort: docker group (new membership needs a re-login).
+  if ! id -nG "$USER" 2>/dev/null | grep -qw docker; then
+    sudo groupadd -f docker 2>/dev/null || true
+    sudo usermod -aG docker "$USER" 2>/dev/null \
+      && warn "added $USER to the docker group — log out/in (or 'wsl --shutdown') for it to apply" \
+      || true
+  fi
+  # systemd runs by default on recent WSL Ubuntu; enable the daemon if present.
+  if have systemctl && [ -d /run/systemd/system ]; then
+    sudo systemctl enable --now docker >/dev/null 2>&1 || warn "could not enable the docker service — check 'systemctl status docker'"
+  else
+    warn "systemd not active in this WSL distro — enable it ([boot] systemd=true in /etc/wsl.conf) then re-run"
+  fi
+}
+
 ensure_aoe() {  # agent-of-empires: multi-agent tmux session manager (TUI + web)
   apt_install tmux
   if have aoe && [ "$NO_UPDATE" = 1 ]; then ok "aoe $(aoe --version 2>/dev/null | head -1)"; return; fi
@@ -754,6 +786,7 @@ doctor() {
   check dotnet   optional "dotnet --version"
   check ctx-wire optional "ctx-wire --version"
   check ctx7     optional
+  check docker   optional "docker --version"
   check aoe      optional "aoe --version"
   check codegraph optional "codegraph --version"
   check ast-grep optional "ast-grep --version"
@@ -789,6 +822,7 @@ ensure_plugins
 ensure_skills
 ensure_ctx_wire
 ensure_ctx7
+ensure_docker
 ensure_aoe
 ensure_codegraph
 ensure_ast_grep

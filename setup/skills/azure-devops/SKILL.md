@@ -1,9 +1,13 @@
 ---
 name: azure-devops
-description: Drive Azure DevOps (Boards, Repos/PRs, Pipelines) from the shell with the az CLI and its azure-devops extension. Use whenever the user mentions Azure DevOps, ADO, boards, work items, ADO pull requests, or ADO pipelines. Reads and writes; PAT-authenticated.
+description: Drive Azure DevOps (Boards, Repos/PRs, Pipelines) from the shell with the az CLI and its azure-devops extension. Use whenever the user mentions Azure DevOps, ADO, boards, work items, ADO pull requests, or ADO pipelines. Reads and writes; PAT-authenticated. If the azdo-pr skill is installed, it OWNS the full PR lifecycle (create-review-complete + linked Jira tickets) — defer to it for end-to-end PR flows; this skill is the raw az CLI layer.
 ---
 
 # Azure DevOps via `az devops`
+
+> **PR lifecycle**: when the `azdo-pr` skill is present, end-to-end PR flows
+> (create → review → complete, with linked Jira tickets) go through it. Use
+> this skill for the underlying `az` commands and everything non-PR-lifecycle.
 
 Use the `az` CLI (extension `azure-devops`) for everything Azure DevOps. Never
 guess org/project — defaults are pre-configured; PAT auth is already wired.

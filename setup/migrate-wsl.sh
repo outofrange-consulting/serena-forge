@@ -10,15 +10,23 @@
 #               OAuth), ~/.config/gh (gh), ~/.gitconfig + ~/.git-credentials,
 #               ~/.ssh, ~/.azure (az session), acli config, ~/.nuget NuGet.Config,
 #               ~/.npmrc, ~/.config/claude-tools/secrets.env (PATs of this setup)
-#   Memory    : ALL of ~/.claude (CLAUDE.md, settings, keybindings, skills/,
-#               commands/, agents/, hooks/, output-styles/, history.jsonl, …)
-#               EXCEPT rebuildable state (plugins, shell-snapshots, statsig,
-#               ide, caches). Session-tied data (projects/ transcripts, todos/,
-#               file-history/ rewind checkpoints) with --with-sessions.
-#               Per-repo local memory a re-clone loses (CLAUDE.local.md,
-#               .claude/settings.local.json, .env, .env.local, .mcp.local.json,
-#               .serena/ minus cache) is saved per repo and overlaid after
-#               clone without overwriting committed files.
+#   MEMORY    : ALWAYS carried, sessions or not —
+#               * user memory: ~/.claude/CLAUDE.md + ~/.claude/rules/
+#               * AUTO memory: ~/.claude/projects/<project>/memory/ (MEMORY.md
+#                 + topic files — Claude's own accumulated learning, machine-
+#                 local, NOT in git) + custom autoMemoryDirectory if set
+#               * project memory: committed CLAUDE.md/.claude/rules come back
+#                 via re-clone; local memory (CLAUDE.local.md,
+#                 .claude/settings.local.json, .env, .env.local,
+#                 .mcp.local.json, .serena/ minus cache) is saved per repo and
+#                 overlaid after clone without overwriting committed files.
+#   ~/.claude : rest copied in full (commands/, agents/, hooks/, output-styles/,
+#               keybindings, settings, history, …) EXCEPT rebuildable state
+#               (plugins, shell-snapshots, statsig, ide, caches) and skills/ —
+#               only KEEP_SKILLS migrate (default: azdo-pr; --keep-skill=NAME
+#               repeatable), the rest is superseded by install-wsl.sh.
+#               Session-tied data (projects/ transcripts, todos/, file-history/
+#               rewind checkpoints) with --with-sessions.
 #   Brain     : ~/second-brain — if it has a git remote and is clean+pushed, only
 #               .env is exported (re-clone on restore); otherwise the whole
 #               folder is archived. Dirty/unpushed state is REPORTED first.
@@ -39,6 +47,7 @@
 #   --keep=REL         extra path to copy in full, relative to sources
 #                      (repeatable; replaces defaults when given)
 #   --out=FILE         archive path (default ~/wsl-migration-<date>.tar.gz)
+#   --keep-skill=NAME  personal skill to migrate (repeatable; default azdo-pr)
 #   --with-sessions    include ~/.claude/projects (session transcripts, heavy)
 # Flags (restore):
 #   --sources=DIR      where to re-clone (default ~/sources)
@@ -52,14 +61,15 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 MODE="${1:-}"; shift || true
 SOURCES="$HOME/sources"; BRAIN="$HOME/second-brain"; OUT=""; WITH_SESSIONS=0
-KEEPS=(); ARCHIVE=""
+KEEPS=(); ARCHIVE=""; KEEP_SKILLS_OVERRIDE=()
 for a in "$@"; do case "$a" in
   --sources=*) SOURCES="${a#*=}" ;;
   --brain=*)   BRAIN="${a#*=}" ;;
   --keep=*)    KEEPS+=("${a#*=}") ;;
+  --keep-skill=*) KEEP_SKILLS_OVERRIDE+=("${a#*=}") ;;
   --out=*)     OUT="${a#*=}" ;;
   --with-sessions) WITH_SESSIONS=1 ;;
-  -h|--help) sed -n '2,45p' "$0"; exit 0 ;;
+  -h|--help) sed -n '2,54p' "$0"; exit 0 ;;
   *) [ -z "$ARCHIVE" ] && ARCHIVE="$a" || { echo "unknown arg: $a" >&2; exit 2; } ;;
 esac; done
 [ "${#KEEPS[@]}" = 0 ] && KEEPS=("daft-punk" "dom-order-api/docs")
@@ -77,14 +87,31 @@ AUTH_PATHS=(
   .nuget/NuGet .npmrc
 )
 
-# ~/.claude = ALL Claude memory. Copied in full EXCEPT rebuildable/ephemeral
-# state; session-tied data is opt-in (heavy).
+# ~/.claude — copied in full EXCEPT rebuildable/ephemeral state; session-tied
+# data is opt-in (heavy).
 #   always excluded : plugins (reinstalled by install-wsl.sh), shell-snapshots,
-#                     statsig, ide, downloads, caches
+#                     statsig, ide, downloads, caches, and skills (see
+#                     KEEP_SKILLS — only chosen ones migrate, the rest is
+#                     reinstalled/replaced by install-wsl.sh)
 #   --with-sessions : projects (transcripts + resumable sessions), todos,
 #                     file-history (/rewind checkpoints)
-CLAUDE_EXCLUDE_ALWAYS=(plugins shell-snapshots statsig ide downloads cache caches tmp)
+#
+# MEMORY is always carried, sessions or not:
+#   user memory   : ~/.claude/CLAUDE.md + ~/.claude/rules/   (in the full copy)
+#   AUTO memory   : ~/.claude/projects/<project>/memory/     (re-added below
+#                   even though projects/ is excluded by default — this is
+#                   Claude's own accumulated learning, machine-local, NOT in
+#                   git; losing it means Claude relearns everything)
+#   custom dir    : settings.json autoMemoryDirectory, when set
+#   project memory: CLAUDE.md/.claude/rules in the repos (git brings it back)
+#                   + CLAUDE.local.md etc. via REPO_LOCAL_PATHS
+CLAUDE_EXCLUDE_ALWAYS=(plugins shell-snapshots statsig ide downloads cache caches tmp skills)
 CLAUDE_EXCLUDE_SESSION=(projects todos file-history)
+
+# Personal skills to migrate (the rest of ~/.claude/skills is superseded by
+# what install-wsl.sh reinstalls). Override with repeated --keep-skill=NAME.
+KEEP_SKILLS=(azdo-pr)
+[ "${#KEEP_SKILLS_OVERRIDE[@]}" = 0 ] || KEEP_SKILLS=("${KEEP_SKILLS_OVERRIDE[@]}")
 
 # Per-repo LOCAL memory that a clean re-clone loses (untracked/ignored files).
 # Saved per repo on export, overlaid after clone on restore WITHOUT overwriting
@@ -123,6 +150,47 @@ do_export() {
     mkdir -p "$stage/home"
     (cd "$HOME" && tar -cf - "${tar_flags[@]}" ./.claude) | tar -xf - -C "$stage/home"
     ok ".claude ($([ "$WITH_SESSIONS" = 1 ] && echo 'with' || echo 'without') sessions/todos/file-history; plugins & caches excluded)"
+
+    # AUTO MEMORY — always carried, even when projects/ (sessions) is excluded:
+    # ~/.claude/projects/<project>/memory/ is Claude's own accumulated
+    # learning, machine-local and not in git.
+    if [ "$WITH_SESSIONS" = 0 ] && [ -d "$HOME/.claude/projects" ]; then
+      local memdirs
+      memdirs="$(cd "$HOME" && find ./.claude/projects -mindepth 2 -maxdepth 2 -type d -name memory 2>/dev/null)"
+      if [ -n "$memdirs" ]; then
+        (cd "$HOME" && printf '%s\n' "$memdirs" | tar -cf - -T -) | tar -xf - -C "$stage/home"
+        ok "auto memory: $(printf '%s\n' "$memdirs" | wc -l) project memory dir(s)"
+      fi
+    fi
+    # Custom autoMemoryDirectory (settings.json) — carried when it lives under ~.
+    local amd
+    amd="$(jq -r '.autoMemoryDirectory // empty' "$HOME/.claude/settings.json" 2>/dev/null || true)"
+    if [ -n "$amd" ]; then
+      amd="${amd/#\~/$HOME}"
+      case "$amd" in
+        "$HOME"/*) [ -d "$amd" ] && { mkdir -p "$stage/home/$(dirname "${amd#"$HOME"/}")"; cp -a "$amd" "$stage/home/$(dirname "${amd#"$HOME"/}")/"; ok "custom autoMemoryDirectory: ${amd#"$HOME"/}"; } ;;
+        *) report "autoMemoryDirectory outside \$HOME ($amd) — carry it yourself" ;;
+      esac
+    fi
+
+    # Personal skills: only KEEP_SKILLS migrate (the rest is superseded by
+    # install-wsl.sh); dropped ones are listed in the report.
+    local s
+    for s in "${KEEP_SKILLS[@]}"; do
+      if [ -d "$HOME/.claude/skills/$s" ]; then
+        mkdir -p "$stage/home/.claude/skills"
+        cp -a "$HOME/.claude/skills/$s" "$stage/home/.claude/skills/" && ok "skill kept: $s"
+      else
+        report "skill to keep not found: $s"
+      fi
+    done
+    if [ -d "$HOME/.claude/skills" ]; then
+      for s in "$HOME/.claude/skills"/*/; do
+        [ -d "$s" ] || continue
+        s="$(basename "$s")"
+        case " ${KEEP_SKILLS[*]} " in *" $s "*) ;; *) printf 'skill dropped (superseded by setup): %s\n' "$s" >> "$stage/report.txt" ;; esac
+      done
+    fi
   else
     report "absent: .claude"
   fi
@@ -263,5 +331,5 @@ do_restore() {
 case "$MODE" in
   export)  have jq || { echo "jq required (sudo apt-get install -y jq)" >&2; exit 1; }; do_export ;;
   restore) have jq || { echo "jq required (sudo apt-get install -y jq)" >&2; exit 1; }; do_restore ;;
-  *) sed -n '2,45p' "$0"; exit 2 ;;
+  *) sed -n '2,54p' "$0"; exit 2 ;;
 esac

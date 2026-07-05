@@ -121,10 +121,13 @@ point: a clean machine where the installer rebuilds the harness):
   topic files, Claude's own accumulated learning, machine-local and not in
   git — plus a custom `autoMemoryDirectory` if configured), and per-repo
   local memory (below);
+- **Sessions**: `~/.claude/projects/` (transcripts — token stats + session
+  resume; the auto-memory dirs ride along), `~/.claude/sessions/`,
+  `~/.claude/todos/`, `~/.claude/history.jsonl`;
 - **Skills**: ONLY `azdo-pr` by default (`--keep-skill=NAME` repeatable) —
   dropped ones listed in the report;
 - **Nothing else from `~/.claude`**: no settings, keybindings, `commands/`,
-  `agents/`, hooks, history, todos, sessions, plugins.
+  `agents/`, hooks, plugins.
 
 Export also carries the second brain's `.env` (the repo itself is
 re-cloned from its remote — or archived in full if it has none), a

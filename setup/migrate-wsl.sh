@@ -19,11 +19,13 @@
 #                 .claude/settings.local.json, .env, .env.local,
 #                 .mcp.local.json, .serena/ minus cache) is saved per repo and
 #                 overlaid after clone without overwriting committed files.
+#   SESSIONS  : ~/.claude/projects (transcripts — token stats + resume),
+#               ~/.claude/sessions, ~/.claude/todos, ~/.claude/history.jsonl.
 #   Skills    : ONLY the ones in KEEP_SKILLS (default: azdo-pr;
 #               --keep-skill=NAME repeatable).
 #   NOTHING else from ~/.claude migrates — no settings, keybindings,
-#   commands/, agents/, hooks, history, todos, sessions, plugins. The whole
-#   point: a clean machine where install-wsl.sh rebuilds the harness.
+#   commands/, agents/, hooks, plugins. The whole point: a clean machine
+#   where install-wsl.sh rebuilds the harness.
 #   Brain     : ~/second-brain — if it has a git remote and is clean+pushed, only
 #               .env is exported (re-clone on restore); otherwise the whole
 #               folder is archived. Dirty/unpushed state is REPORTED first.
@@ -64,7 +66,7 @@ for a in "$@"; do case "$a" in
   --keep=*)    KEEPS+=("${a#*=}") ;;
   --keep-skill=*) KEEP_SKILLS_OVERRIDE+=("${a#*=}") ;;
   --out=*)     OUT="${a#*=}" ;;
-  -h|--help) sed -n '2,50p' "$0"; exit 0 ;;
+  -h|--help) sed -n '2,52p' "$0"; exit 0 ;;
   *) [ -z "$ARCHIVE" ] && ARCHIVE="$a" || { echo "unknown arg: $a" >&2; exit 2; } ;;
 esac; done
 [ "${#KEEPS[@]}" = 0 ] && KEEPS=("daft-punk" "dom-order-api/docs")
@@ -81,17 +83,22 @@ AUTH_PATHS=(
   .nuget/NuGet .npmrc
 )
 
-# ~/.claude — STRICT WHITELIST: auth (above) + MEMORY + kept skills. Nothing
-# else migrates (no settings, commands/, agents/, hooks, keybindings, history,
-# todos, sessions, plugins…) — the whole point of the migration is a clean
+# ~/.claude — STRICT WHITELIST: auth (above) + MEMORY + SESSIONS + kept
+# skills. Nothing else migrates (no settings, commands/, agents/, hooks,
+# keybindings, plugins…) — the whole point of the migration is a clean
 # machine where install-wsl.sh rebuilds the harness from scratch.
 #   user memory   : ~/.claude/CLAUDE.md + ~/.claude/rules/
-#   AUTO memory   : ~/.claude/projects/<project>/memory/ (MEMORY.md + topic
-#                   files — Claude's own accumulated learning, machine-local,
-#                   NOT in git) + settings.json autoMemoryDirectory if set
+#   AUTO memory   : ~/.claude/projects/<project>/memory/ — carried by taking
+#                   projects/ whole (below) + settings.json
+#                   autoMemoryDirectory if set
+#   sessions      : ~/.claude/projects (transcripts — stats + resume),
+#                   ~/.claude/sessions, ~/.claude/todos, ~/.claude/history.jsonl
 #   project memory: committed CLAUDE.md/.claude/rules come back via re-clone;
 #                   local files via REPO_LOCAL_PATHS below
-CLAUDE_MEMORY_PATHS=(.claude/CLAUDE.md .claude/rules)
+CLAUDE_MEMORY_PATHS=(
+  .claude/CLAUDE.md .claude/rules
+  .claude/projects .claude/sessions .claude/todos .claude/history.jsonl
+)
 
 # Personal skills to migrate (the rest of ~/.claude/skills is superseded by
 # what install-wsl.sh reinstalls). Override with repeated --keep-skill=NAME.
@@ -127,25 +134,16 @@ do_export() {
   done
   have gh && ! gh auth status >/dev/null 2>&1 && report "gh not authenticated on this machine"
 
-  say "Claude memory + kept skills (STRICT whitelist — no settings/commands/agents/sessions)"
+  say "Claude memory + sessions + kept skills (STRICT whitelist — no settings/commands/agents)"
   if [ -d "$HOME/.claude" ]; then
-    # User memory: CLAUDE.md + rules/.
+    # User memory (CLAUDE.md, rules/) + sessions (projects/ — which carries
+    # the per-project auto memory dirs — sessions/, todos/, history).
     for rel in "${CLAUDE_MEMORY_PATHS[@]}"; do
       if [ -e "$HOME/$rel" ]; then
         mkdir -p "$stage/home/$(dirname "$rel")"
         cp -a "$HOME/$rel" "$stage/home/$(dirname "$rel")/" && ok "$rel"
       fi
     done
-    # AUTO MEMORY: ~/.claude/projects/<project>/memory/ — Claude's own
-    # accumulated learning, machine-local and not in git.
-    if [ -d "$HOME/.claude/projects" ]; then
-      local memdirs
-      memdirs="$(cd "$HOME" && find ./.claude/projects -mindepth 2 -maxdepth 2 -type d -name memory 2>/dev/null)"
-      if [ -n "$memdirs" ]; then
-        (cd "$HOME" && printf '%s\n' "$memdirs" | tar -cf - -T -) | tar -xf - -C "$stage/home"
-        ok "auto memory: $(printf '%s\n' "$memdirs" | wc -l) project memory dir(s)"
-      fi
-    fi
     # Custom autoMemoryDirectory (settings.json) — carried when it lives under ~.
     local amd
     amd="$(jq -r '.autoMemoryDirectory // empty' "$HOME/.claude/settings.json" 2>/dev/null || true)"
@@ -315,5 +313,5 @@ do_restore() {
 case "$MODE" in
   export)  have jq || { echo "jq required (sudo apt-get install -y jq)" >&2; exit 1; }; do_export ;;
   restore) have jq || { echo "jq required (sudo apt-get install -y jq)" >&2; exit 1; }; do_restore ;;
-  *) sed -n '2,50p' "$0"; exit 2 ;;
+  *) sed -n '2,52p' "$0"; exit 2 ;;
 esac

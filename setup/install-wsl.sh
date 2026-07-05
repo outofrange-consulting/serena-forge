@@ -16,7 +16,8 @@
 #                     outofrange-consulting/omp-dev-team) + azure-devops
 #                     (this repo, drives `az devops`)
 #   CLI tools       : ctx-wire (+ shims + git/dotnet filters), acli (Atlassian),
-#                     az + azure-devops extension, ctx7 (docs CLI)
+#                     az + azure-devops extension, ctx7 (docs CLI),
+#                     agent-of-empires (aoe — multi-agent tmux manager)
 #   dev-team tooling: CodeGraph, ast-grep, semgrep, Stryker.NET (global) —
 #                     Stryker JS / pitest stay per-project (/init-dev-team)
 #   Repo indexing   : asks for a code root; ONE CodeGraph graph at that root
@@ -60,7 +61,7 @@ for a in "$@"; do case "$a" in
   --code-root=*) CODE_ROOT="${a#*=}" ;;
   --skip-brain) SKIP_BRAIN=1 ;; --skip-az) SKIP_AZ=1 ;; --skip-acli) SKIP_ACLI=1 ;;
   --skip-miro) SKIP_MIRO=1 ;; --skip-dotnet) SKIP_DOTNET=1 ;; --skip-index) SKIP_INDEX=1 ;;
-  -h|--help) sed -n '2,51p' "$0"; exit 0 ;;
+  -h|--help) sed -n '2,52p' "$0"; exit 0 ;;
   *) echo "unknown arg: $a" >&2; exit 2 ;;
 esac; done
 
@@ -424,6 +425,16 @@ ensure_ctx_wire() {
   ok "ctx-wire $(ctx-wire --version 2>/dev/null | head -1)"
 }
 
+ensure_aoe() {  # agent-of-empires: multi-agent tmux session manager (TUI + web)
+  apt_install tmux
+  if have aoe && [ "$NO_UPDATE" = 1 ]; then ok "aoe $(aoe --version 2>/dev/null | head -1)"; return; fi
+  say "Installing/updating agent-of-empires (aoe)"
+  curl -fsSL https://raw.githubusercontent.com/agent-of-empires/agent-of-empires/main/scripts/install.sh | bash >/dev/null 2>&1 \
+    || warn "aoe install failed — https://github.com/agent-of-empires/agent-of-empires"
+  hash -r 2>/dev/null || true
+  have aoe && ok "aoe $(aoe --version 2>/dev/null | head -1)" || warn "aoe not on PATH"
+}
+
 ensure_ctx7() {  # docs CLI used by the context7 skill
   have npm || { warn "npm missing — skipping ctx7"; return 0; }
   if have ctx7 && [ "$NO_UPDATE" = 1 ]; then ok "ctx7 present"; return; fi
@@ -743,6 +754,7 @@ doctor() {
   check dotnet   optional "dotnet --version"
   check ctx-wire optional "ctx-wire --version"
   check ctx7     optional
+  check aoe      optional "aoe --version"
   check codegraph optional "codegraph --version"
   check ast-grep optional "ast-grep --version"
   check semgrep  optional "semgrep --version"
@@ -777,6 +789,7 @@ ensure_plugins
 ensure_skills
 ensure_ctx_wire
 ensure_ctx7
+ensure_aoe
 ensure_codegraph
 ensure_ast_grep
 ensure_semgrep

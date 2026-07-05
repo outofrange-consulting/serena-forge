@@ -19,8 +19,9 @@ bash serena-forge/setup/install-wsl.sh -y
 
 | Component | Detail |
 | --- | --- |
-| Base deps | `git curl jq unzip zip build-essential python3 pipx` (apt), GitHub CLI `gh` (+ `gh auth login` if needed — required by dev-team and to clone the private repos) |
+| Base deps | `git curl jq unzip zip build-essential python3 pipx libicu libssl` (apt), GitHub CLI `gh` (+ `gh auth login` if needed — required by dev-team and to clone the private repos) |
 | Runtimes | Node LTS (`~/.local`), `uv`/`uvx` (Serena launcher), .NET 10 SDK (`~/.dotnet`, Serena's Roslyn backend — .NET 9 is not supported) |
+| .NET extras | telemetry opt-out (`DOTNET_CLI_TELEMETRY_OPTOUT`/`DOTNET_NOLOGO` in env.sh), HTTPS dev cert (`dotnet dev-certs https`), **Azure Artifacts NuGet credential provider** (private `pkgs.dev.azure.com` feeds auth with `AZURE_DEVOPS_EXT_PAT`), global tools: `dotnet-ef`, `dotnet-stryker`, `dotnet-reportgenerator-globaltool`, `dotnet-outdated-tool` |
 | Claude Code | native installer; `claude update` on re-run |
 | Plugins | `serena-forge@serena-forge` (this repo — symbolic C# enforcement, build safety net, destructive-command guard, all hooks included), `dev-team@bfinster` (**upstream** [bdfinst/agentic-dev-team](https://github.com/bdfinst/agentic-dev-team)), `caveman@caveman` (**upstream** [JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman)) and `ponytail@ponytail` (**upstream** [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail) — the YAGNI / laziest-senior-dev discipline) |
 | Skills (`~/.claude/skills`) | `atlassian` (drives `acli`), `context7` (drives `ctx7`) — mirrored from [omp-dev-team](https://github.com/outofrange-consulting/omp-dev-team)'s token-diet — plus `azure-devops` (this repo, drives `az devops`). Stale `caveman`/`yagni` mirrors from earlier runs are removed (they're upstream plugins now) |
@@ -95,6 +96,38 @@ Nothing in the plugin cache is modified, so `claude plugin update dev-team`
 can never revert this setup. (A patch-the-cache pipeline would have broken on
 the very last upstream release, which rewrote these hooks from bash to
 Python.)
+
+## Migrating from an old WSL distro — `migrate-wsl.sh`
+
+Moving to a fresh Ubuntu? Two commands:
+
+```bash
+# OLD distro — produces ~/wsl-migration-<date>.tar.gz (chmod 600, holds credentials)
+bash serena-forge/setup/migrate-wsl.sh export
+
+# NEW distro — restore auth/memory, re-clone sources, then run the installer
+bash serena-forge/setup/migrate-wsl.sh restore ~/wsl-migration-<date>.tar.gz
+bash serena-forge/setup/install-wsl.sh
+```
+
+**Export carries**: Claude Code auth + MCP OAuth (`~/.claude/.credentials.json`,
+`~/.claude.json`), memory (`~/.claude/CLAUDE.md`, `settings.json`,
+`keybindings.json`, `skills/`; session transcripts with `--with-sessions`),
+`gh` / git / ssh / az / acli / NuGet / npm auth, this setup's
+`secrets.env`, the second brain's `.env` (the repo itself is re-cloned from
+its remote — or archived in full if it has none), a **manifest of every git
+repo under `~/sources`** (origin, branch, `.git/config` — **linked worktrees
+excluded**, repos are re-cloned cleanly on restore with the saved config put
+back), and **full copies** of the keep-dirs (default: `daft-punk` and
+`dom-order-api/docs`; override with repeated `--keep=REL`).
+
+**Export verifies and reports** before you wipe anything: dirty working
+trees, unpushed commits, stashes (not migrated), repos without a remote
+(not re-clonable), missing auth files, `gh` not authenticated, brain not
+pushed. Fix the report, re-run, then wipe the old distro.
+
+Flags: `--sources=DIR` (default `~/sources`), `--brain=DIR` (default
+`~/second-brain`), `--out=FILE`, `--keep=REL` (repeatable), `--with-sessions`.
 
 ## After the first run
 

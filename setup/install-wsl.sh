@@ -102,6 +102,7 @@ done
 unset _d
 export PATH
 if [ -d "$HOME/.dotnet" ]; then export DOTNET_ROOT="$HOME/.dotnet"; fi
+export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 if [ -f "$HOME/.config/claude-tools/secrets.env" ]; then
   . "$HOME/.config/claude-tools/secrets.env"
 fi
@@ -257,20 +258,52 @@ ensure_uv() {  # serena-forge launches Serena via uvx
 
 ensure_dotnet() {  # Serena's C# backend (Roslyn) requires .NET 10+ (NOT 9)
   [ "$SKIP_DOTNET" = 1 ] && return 0
+  apt_install libicu-dev libssl-dev  # dotnet tarball runtime deps (globalization/TLS)
   if dotnet --list-sdks 2>/dev/null | grep -q '^10\.' && [ "$NO_UPDATE" = 1 ]; then
-    ok "dotnet SDK 10 present"; return
-  fi
-  say "Installing/updating .NET 10 SDK into ~/.dotnet (Serena Roslyn backend)"
-  local tmp; tmp="$(mktemp)"
-  if curl -fsSL https://dot.net/v1/dotnet-install.sh -o "$tmp"; then
-    bash "$tmp" --channel 10.0 --install-dir "$HOME/.dotnet" >/dev/null \
-      && ok "dotnet $("$HOME/.dotnet/dotnet" --version 2>/dev/null)" \
-      || warn ".NET 10 install failed — https://dot.net"
+    ok "dotnet SDK 10 present"
   else
-    warn "could not download dotnet-install.sh"
+    say "Installing/updating .NET 10 SDK into ~/.dotnet (Serena Roslyn backend)"
+    local tmp; tmp="$(mktemp)"
+    if curl -fsSL https://dot.net/v1/dotnet-install.sh -o "$tmp"; then
+      bash "$tmp" --channel 10.0 --install-dir "$HOME/.dotnet" >/dev/null \
+        && ok "dotnet $("$HOME/.dotnet/dotnet" --version 2>/dev/null)" \
+        || warn ".NET 10 install failed — https://dot.net"
+    else
+      warn "could not download dotnet-install.sh"
+    fi
+    rm -f "$tmp"
   fi
-  rm -f "$tmp"
   export DOTNET_ROOT="$HOME/.dotnet"
+  have dotnet || return 0
+  # ASP.NET Core HTTPS dev certificate (creation only — Linux trust is manual).
+  dotnet dev-certs https >/dev/null 2>&1 || true
+  # Azure Artifacts credential provider: private NuGet feeds on dev.azure.com
+  # authenticate with AZURE_DEVOPS_EXT_PAT / interactive device flow.
+  if [ ! -d "$HOME/.nuget/plugins/netcore/CredentialProvider.Microsoft" ]; then
+    say "Installing Azure Artifacts NuGet credential provider"
+    curl -fsSL https://aka.ms/install-artifacts-credprovider.sh | bash >/dev/null 2>&1 \
+      && ok "artifacts-credprovider installed" || warn "artifacts-credprovider install failed"
+  fi
+}
+
+dotnet_tool() {  # dotnet_tool <package-id>
+  local pkg="$1"
+  if dotnet tool list --global 2>/dev/null | grep -qi "^$pkg "; then
+    [ "$NO_UPDATE" = 1 ] || dotnet tool update --global "$pkg" >/dev/null 2>&1 || true
+    ok "$pkg (global, updated)"
+  else
+    dotnet tool install --global "$pkg" >/dev/null 2>&1 \
+      && ok "$pkg installed" || warn "$pkg install failed"
+  fi
+}
+
+ensure_dotnet_tools() {  # global tools the dev-team workflow leans on
+  have dotnet || return 0
+  say "dotnet global tools"
+  dotnet_tool dotnet-ef                             # EF Core migrations
+  dotnet_tool dotnet-stryker                        # C# mutation gate
+  dotnet_tool dotnet-reportgenerator-globaltool     # coverage reports
+  dotnet_tool dotnet-outdated-tool                  # dependency freshness
 }
 
 # ---------------------------------------------------------------------------
@@ -498,18 +531,6 @@ ensure_semgrep() {
     pipx install semgrep >/dev/null 2>&1 || { warn "semgrep install failed"; return 0; }
   fi
   ok "semgrep $(semgrep --version 2>/dev/null | head -1)"
-}
-
-ensure_stryker_dotnet() {  # C# mutation gate — global so it works in any repo
-  have dotnet || return 0
-  if dotnet tool list --global 2>/dev/null | grep -q dotnet-stryker; then
-    [ "$NO_UPDATE" = 1 ] || dotnet tool update --global dotnet-stryker >/dev/null 2>&1 || true
-    ok "dotnet-stryker (global)"
-  else
-    say "Installing Stryker.NET (global dotnet tool)"
-    dotnet tool install --global dotnet-stryker >/dev/null 2>&1 \
-      && ok "dotnet-stryker installed" || warn "dotnet-stryker install failed"
-  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -759,7 +780,7 @@ ensure_ctx7
 ensure_codegraph
 ensure_ast_grep
 ensure_semgrep
-ensure_stryker_dotnet
+ensure_dotnet_tools
 ensure_acli
 ensure_az_devops
 ensure_miro

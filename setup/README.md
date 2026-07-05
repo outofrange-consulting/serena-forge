@@ -111,15 +111,22 @@ bash serena-forge/setup/install-wsl.sh
 ```
 
 **Export carries**: Claude Code auth + MCP OAuth (`~/.claude/.credentials.json`,
-`~/.claude.json`), memory (`~/.claude/CLAUDE.md`, `settings.json`,
-`keybindings.json`, `skills/`; session transcripts with `--with-sessions`),
-`gh` / git / ssh / az / acli / NuGet / npm auth, this setup's
-`secrets.env`, the second brain's `.env` (the repo itself is re-cloned from
-its remote — or archived in full if it has none), a **manifest of every git
-repo under `~/sources`** (origin, branch, `.git/config` — **linked worktrees
-excluded**, repos are re-cloned cleanly on restore with the saved config put
-back), and **full copies** of the keep-dirs (default: `daft-punk` and
-`dom-order-api/docs`; override with repeated `--keep=REL`).
+`~/.claude.json`), **all Claude memory** — the whole `~/.claude` (CLAUDE.md,
+settings, keybindings, `skills/`, `commands/`, `agents/`, hooks,
+output-styles, prompt history, …) minus rebuildable state (`plugins/`,
+shell-snapshots, statsig, ide, caches); session-tied data (`projects/`
+transcripts, `todos/`, `file-history/` rewind checkpoints) with
+`--with-sessions` — plus `gh` / git / ssh / az / acli / NuGet / npm auth,
+this setup's `secrets.env`, the second brain's `.env` (the repo itself is
+re-cloned from its remote — or archived in full if it has none), a
+**manifest of every git repo under `~/sources`** (origin, branch,
+`.git/config` — **linked worktrees excluded**, repos re-cloned cleanly on
+restore with the saved config put back), **per-repo local memory** a clean
+clone loses (`CLAUDE.local.md`, `.claude/settings.local.json`, `.env`,
+`.env.local`, `.mcp.local.json`, `.serena/` minus cache — overlaid after
+clone without overwriting committed files), and **full copies** of the
+keep-dirs (default: `daft-punk` and `dom-order-api/docs`; override with
+repeated `--keep=REL`).
 
 **Export verifies and reports** before you wipe anything: dirty working
 trees, unpushed commits, stashes (not migrated), repos without a remote

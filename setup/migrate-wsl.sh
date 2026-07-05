@@ -10,8 +10,15 @@
 #               OAuth), ~/.config/gh (gh), ~/.gitconfig + ~/.git-credentials,
 #               ~/.ssh, ~/.azure (az session), acli config, ~/.nuget NuGet.Config,
 #               ~/.npmrc, ~/.config/claude-tools/secrets.env (PATs of this setup)
-#   Memory    : ~/.claude/CLAUDE.md, settings.json, keybindings.json, skills/
-#               (+ session transcripts ~/.claude/projects with --with-sessions)
+#   Memory    : ALL of ~/.claude (CLAUDE.md, settings, keybindings, skills/,
+#               commands/, agents/, hooks/, output-styles/, history.jsonl, …)
+#               EXCEPT rebuildable state (plugins, shell-snapshots, statsig,
+#               ide, caches). Session-tied data (projects/ transcripts, todos/,
+#               file-history/ rewind checkpoints) with --with-sessions.
+#               Per-repo local memory a re-clone loses (CLAUDE.local.md,
+#               .claude/settings.local.json, .env, .env.local, .mcp.local.json,
+#               .serena/ minus cache) is saved per repo and overlaid after
+#               clone without overwriting committed files.
 #   Brain     : ~/second-brain — if it has a git remote and is clean+pushed, only
 #               .env is exported (re-clone on restore); otherwise the whole
 #               folder is archived. Dirty/unpushed state is REPORTED first.
@@ -52,15 +59,15 @@ for a in "$@"; do case "$a" in
   --keep=*)    KEEPS+=("${a#*=}") ;;
   --out=*)     OUT="${a#*=}" ;;
   --with-sessions) WITH_SESSIONS=1 ;;
-  -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+  -h|--help) sed -n '2,45p' "$0"; exit 0 ;;
   *) [ -z "$ARCHIVE" ] && ARCHIVE="$a" || { echo "unknown arg: $a" >&2; exit 2; } ;;
 esac; done
 [ "${#KEEPS[@]}" = 0 ] && KEEPS=("daft-punk" "dom-order-api/docs")
 
-# Home-relative paths worth carrying (auth + memory). Missing ones are skipped.
+# Home-relative paths worth carrying (auth). Missing ones are skipped.
+# ~/.claude is handled separately (full copy minus exclusions — see below).
 AUTH_PATHS=(
-  .claude/.credentials.json .claude.json
-  .claude/CLAUDE.md .claude/settings.json .claude/keybindings.json .claude/skills
+  .claude.json
   .config/claude-tools/secrets.env
   .config/gh
   .gitconfig .git-credentials
@@ -69,6 +76,20 @@ AUTH_PATHS=(
   .acli .config/acli
   .nuget/NuGet .npmrc
 )
+
+# ~/.claude = ALL Claude memory. Copied in full EXCEPT rebuildable/ephemeral
+# state; session-tied data is opt-in (heavy).
+#   always excluded : plugins (reinstalled by install-wsl.sh), shell-snapshots,
+#                     statsig, ide, downloads, caches
+#   --with-sessions : projects (transcripts + resumable sessions), todos,
+#                     file-history (/rewind checkpoints)
+CLAUDE_EXCLUDE_ALWAYS=(plugins shell-snapshots statsig ide downloads cache caches tmp)
+CLAUDE_EXCLUDE_SESSION=(projects todos file-history)
+
+# Per-repo LOCAL memory that a clean re-clone loses (untracked/ignored files).
+# Saved per repo on export, overlaid after clone on restore WITHOUT overwriting
+# anything the clone brought back.
+REPO_LOCAL_PATHS=(CLAUDE.local.md .claude/settings.local.json .claude/CLAUDE.local.md .env .env.local .mcp.local.json)
 
 is_worktree() { [ -f "$1/.git" ]; }   # linked worktree/submodule: .git is a FILE
 
@@ -82,7 +103,7 @@ do_export() {
   : > "$stage/report.txt"
   report() { printf '%s\n' "$*" >> "$stage/report.txt"; warn "$*"; }
 
-  say "Auth + memory"
+  say "Auth"
   for rel in "${AUTH_PATHS[@]}"; do
     p="$HOME/$rel"
     if [ -e "$p" ]; then
@@ -92,10 +113,19 @@ do_export() {
       printf 'absent: %s\n' "$rel" >> "$stage/report.txt"
     fi
   done
-  if [ "$WITH_SESSIONS" = 1 ] && [ -d "$HOME/.claude/projects" ]; then
-    cp -a "$HOME/.claude/projects" "$stage/home/.claude/" && ok ".claude/projects (sessions)"
-  fi
   have gh && ! gh auth status >/dev/null 2>&1 && report "gh not authenticated on this machine"
+
+  say "Claude memory (~/.claude, full copy minus rebuildable state)"
+  if [ -d "$HOME/.claude" ]; then
+    local excludes=("${CLAUDE_EXCLUDE_ALWAYS[@]}") x tar_flags=()
+    [ "$WITH_SESSIONS" = 1 ] || excludes+=("${CLAUDE_EXCLUDE_SESSION[@]}")
+    for x in "${excludes[@]}"; do tar_flags+=(--exclude="./.claude/$x"); done
+    mkdir -p "$stage/home"
+    (cd "$HOME" && tar -cf - "${tar_flags[@]}" ./.claude) | tar -xf - -C "$stage/home"
+    ok ".claude ($([ "$WITH_SESSIONS" = 1 ] && echo 'with' || echo 'without') sessions/todos/file-history; plugins & caches excluded)"
+  else
+    report "absent: .claude"
+  fi
 
   say "Second brain ($BRAIN)"
   if [ -d "$BRAIN/.git" ]; then
@@ -130,6 +160,19 @@ do_export() {
     [ -n "$(git -C "$repo" stash list 2>/dev/null)" ] && report "$rel: has STASHES (not migrated)"
     mkdir -p "$stage/repo-configs/$rel"
     cp "$repo/.git/config" "$stage/repo-configs/$rel/config" 2>/dev/null || true
+    # Local memory a clean clone loses: CLAUDE.local.md, local settings, .env…
+    # plus .serena (project config + memories) minus its machine-local cache.
+    local lp
+    for lp in "${REPO_LOCAL_PATHS[@]}"; do
+      if [ -e "$repo/$lp" ]; then
+        mkdir -p "$stage/repo-local/$rel/$(dirname "$lp")"
+        cp -a "$repo/$lp" "$stage/repo-local/$rel/$(dirname "$lp")/"
+      fi
+    done
+    if [ -d "$repo/.serena" ]; then
+      mkdir -p "$stage/repo-local/$rel"
+      (cd "$repo" && tar -cf - --exclude='./.serena/cache' ./.serena) | tar -xf - -C "$stage/repo-local/$rel"
+    fi
     [ "$first" = 1 ] || printf ',\n' >> "$stage/manifest.json"; first=0
     jq -n --arg rel "$rel" --arg origin "$origin" --arg branch "$branch" --arg head "$head" \
       '{rel:$rel,origin:$origin,branch:$branch,head:$head}' >> "$stage/manifest.json"
@@ -203,6 +246,9 @@ do_restore() {
       fi
     fi
     [ -f "$stage/repo-configs/$rel/config" ] && cp "$stage/repo-configs/$rel/config" "$repo/.git/config"
+    # Overlay saved local memory WITHOUT overwriting what the clone brought
+    # back (committed .serena/memories etc. win; only missing files land).
+    [ -d "$stage/repo-local/$rel" ] && cp -rn "$stage/repo-local/$rel/." "$repo/" 2>/dev/null || true
   done < <(jq -r '.[] | [.rel, .origin, .branch] | @tsv' "$stage/manifest.json")
   ok "$n repo(s) cloned (saved .git/config restored on all present repos)"
 
@@ -217,5 +263,5 @@ do_restore() {
 case "$MODE" in
   export)  have jq || { echo "jq required (sudo apt-get install -y jq)" >&2; exit 1; }; do_export ;;
   restore) have jq || { echo "jq required (sudo apt-get install -y jq)" >&2; exit 1; }; do_restore ;;
-  *) sed -n '2,40p' "$0"; exit 2 ;;
+  *) sed -n '2,45p' "$0"; exit 2 ;;
 esac

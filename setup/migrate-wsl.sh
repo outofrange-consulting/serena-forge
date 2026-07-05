@@ -10,8 +10,7 @@
 #               OAuth), ~/.config/gh (gh), ~/.gitconfig + ~/.git-credentials,
 #               ~/.ssh, ~/.azure (az session), acli config, ~/.nuget NuGet.Config,
 #               ~/.npmrc, ~/.config/claude-tools/secrets.env (PATs of this setup)
-#   MEMORY    : ALWAYS carried, sessions or not —
-#               * user memory: ~/.claude/CLAUDE.md + ~/.claude/rules/
+#   MEMORY    : * user memory: ~/.claude/CLAUDE.md + ~/.claude/rules/
 #               * AUTO memory: ~/.claude/projects/<project>/memory/ (MEMORY.md
 #                 + topic files — Claude's own accumulated learning, machine-
 #                 local, NOT in git) + custom autoMemoryDirectory if set
@@ -20,13 +19,11 @@
 #                 .claude/settings.local.json, .env, .env.local,
 #                 .mcp.local.json, .serena/ minus cache) is saved per repo and
 #                 overlaid after clone without overwriting committed files.
-#   ~/.claude : rest copied in full (commands/, agents/, hooks/, output-styles/,
-#               keybindings, settings, history, …) EXCEPT rebuildable state
-#               (plugins, shell-snapshots, statsig, ide, caches) and skills/ —
-#               only KEEP_SKILLS migrate (default: azdo-pr; --keep-skill=NAME
-#               repeatable), the rest is superseded by install-wsl.sh.
-#               Session-tied data (projects/ transcripts, todos/, file-history/
-#               rewind checkpoints) with --with-sessions.
+#   Skills    : ONLY the ones in KEEP_SKILLS (default: azdo-pr;
+#               --keep-skill=NAME repeatable).
+#   NOTHING else from ~/.claude migrates — no settings, keybindings,
+#   commands/, agents/, hooks, history, todos, sessions, plugins. The whole
+#   point: a clean machine where install-wsl.sh rebuilds the harness.
 #   Brain     : ~/second-brain — if it has a git remote and is clean+pushed, only
 #               .env is exported (re-clone on restore); otherwise the whole
 #               folder is archived. Dirty/unpushed state is REPORTED first.
@@ -48,7 +45,6 @@
 #                      (repeatable; replaces defaults when given)
 #   --out=FILE         archive path (default ~/wsl-migration-<date>.tar.gz)
 #   --keep-skill=NAME  personal skill to migrate (repeatable; default azdo-pr)
-#   --with-sessions    include ~/.claude/projects (session transcripts, heavy)
 # Flags (restore):
 #   --sources=DIR      where to re-clone (default ~/sources)
 #   --brain=DIR        default ~/second-brain
@@ -60,7 +56,7 @@ warn() { printf '\033[33m  ! %s\033[0m\n' "$*" >&2; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 MODE="${1:-}"; shift || true
-SOURCES="$HOME/sources"; BRAIN="$HOME/second-brain"; OUT=""; WITH_SESSIONS=0
+SOURCES="$HOME/sources"; BRAIN="$HOME/second-brain"; OUT=""
 KEEPS=(); ARCHIVE=""; KEEP_SKILLS_OVERRIDE=()
 for a in "$@"; do case "$a" in
   --sources=*) SOURCES="${a#*=}" ;;
@@ -68,16 +64,14 @@ for a in "$@"; do case "$a" in
   --keep=*)    KEEPS+=("${a#*=}") ;;
   --keep-skill=*) KEEP_SKILLS_OVERRIDE+=("${a#*=}") ;;
   --out=*)     OUT="${a#*=}" ;;
-  --with-sessions) WITH_SESSIONS=1 ;;
-  -h|--help) sed -n '2,54p' "$0"; exit 0 ;;
+  -h|--help) sed -n '2,50p' "$0"; exit 0 ;;
   *) [ -z "$ARCHIVE" ] && ARCHIVE="$a" || { echo "unknown arg: $a" >&2; exit 2; } ;;
 esac; done
 [ "${#KEEPS[@]}" = 0 ] && KEEPS=("daft-punk" "dom-order-api/docs")
 
 # Home-relative paths worth carrying (auth). Missing ones are skipped.
-# ~/.claude is handled separately (full copy minus exclusions — see below).
 AUTH_PATHS=(
-  .claude.json
+  .claude/.credentials.json .claude.json
   .config/claude-tools/secrets.env
   .config/gh
   .gitconfig .git-credentials
@@ -87,26 +81,17 @@ AUTH_PATHS=(
   .nuget/NuGet .npmrc
 )
 
-# ~/.claude — copied in full EXCEPT rebuildable/ephemeral state; session-tied
-# data is opt-in (heavy).
-#   always excluded : plugins (reinstalled by install-wsl.sh), shell-snapshots,
-#                     statsig, ide, downloads, caches, and skills (see
-#                     KEEP_SKILLS — only chosen ones migrate, the rest is
-#                     reinstalled/replaced by install-wsl.sh)
-#   --with-sessions : projects (transcripts + resumable sessions), todos,
-#                     file-history (/rewind checkpoints)
-#
-# MEMORY is always carried, sessions or not:
-#   user memory   : ~/.claude/CLAUDE.md + ~/.claude/rules/   (in the full copy)
-#   AUTO memory   : ~/.claude/projects/<project>/memory/     (re-added below
-#                   even though projects/ is excluded by default — this is
-#                   Claude's own accumulated learning, machine-local, NOT in
-#                   git; losing it means Claude relearns everything)
-#   custom dir    : settings.json autoMemoryDirectory, when set
-#   project memory: CLAUDE.md/.claude/rules in the repos (git brings it back)
-#                   + CLAUDE.local.md etc. via REPO_LOCAL_PATHS
-CLAUDE_EXCLUDE_ALWAYS=(plugins shell-snapshots statsig ide downloads cache caches tmp skills)
-CLAUDE_EXCLUDE_SESSION=(projects todos file-history)
+# ~/.claude — STRICT WHITELIST: auth (above) + MEMORY + kept skills. Nothing
+# else migrates (no settings, commands/, agents/, hooks, keybindings, history,
+# todos, sessions, plugins…) — the whole point of the migration is a clean
+# machine where install-wsl.sh rebuilds the harness from scratch.
+#   user memory   : ~/.claude/CLAUDE.md + ~/.claude/rules/
+#   AUTO memory   : ~/.claude/projects/<project>/memory/ (MEMORY.md + topic
+#                   files — Claude's own accumulated learning, machine-local,
+#                   NOT in git) + settings.json autoMemoryDirectory if set
+#   project memory: committed CLAUDE.md/.claude/rules come back via re-clone;
+#                   local files via REPO_LOCAL_PATHS below
+CLAUDE_MEMORY_PATHS=(.claude/CLAUDE.md .claude/rules)
 
 # Personal skills to migrate (the rest of ~/.claude/skills is superseded by
 # what install-wsl.sh reinstalls). Override with repeated --keep-skill=NAME.
@@ -142,19 +127,18 @@ do_export() {
   done
   have gh && ! gh auth status >/dev/null 2>&1 && report "gh not authenticated on this machine"
 
-  say "Claude memory (~/.claude, full copy minus rebuildable state)"
+  say "Claude memory + kept skills (STRICT whitelist — no settings/commands/agents/sessions)"
   if [ -d "$HOME/.claude" ]; then
-    local excludes=("${CLAUDE_EXCLUDE_ALWAYS[@]}") x tar_flags=()
-    [ "$WITH_SESSIONS" = 1 ] || excludes+=("${CLAUDE_EXCLUDE_SESSION[@]}")
-    for x in "${excludes[@]}"; do tar_flags+=(--exclude="./.claude/$x"); done
-    mkdir -p "$stage/home"
-    (cd "$HOME" && tar -cf - "${tar_flags[@]}" ./.claude) | tar -xf - -C "$stage/home"
-    ok ".claude ($([ "$WITH_SESSIONS" = 1 ] && echo 'with' || echo 'without') sessions/todos/file-history; plugins & caches excluded)"
-
-    # AUTO MEMORY — always carried, even when projects/ (sessions) is excluded:
-    # ~/.claude/projects/<project>/memory/ is Claude's own accumulated
-    # learning, machine-local and not in git.
-    if [ "$WITH_SESSIONS" = 0 ] && [ -d "$HOME/.claude/projects" ]; then
+    # User memory: CLAUDE.md + rules/.
+    for rel in "${CLAUDE_MEMORY_PATHS[@]}"; do
+      if [ -e "$HOME/$rel" ]; then
+        mkdir -p "$stage/home/$(dirname "$rel")"
+        cp -a "$HOME/$rel" "$stage/home/$(dirname "$rel")/" && ok "$rel"
+      fi
+    done
+    # AUTO MEMORY: ~/.claude/projects/<project>/memory/ — Claude's own
+    # accumulated learning, machine-local and not in git.
+    if [ -d "$HOME/.claude/projects" ]; then
       local memdirs
       memdirs="$(cd "$HOME" && find ./.claude/projects -mindepth 2 -maxdepth 2 -type d -name memory 2>/dev/null)"
       if [ -n "$memdirs" ]; then
@@ -331,5 +315,5 @@ do_restore() {
 case "$MODE" in
   export)  have jq || { echo "jq required (sudo apt-get install -y jq)" >&2; exit 1; }; do_export ;;
   restore) have jq || { echo "jq required (sudo apt-get install -y jq)" >&2; exit 1; }; do_restore ;;
-  *) sed -n '2,54p' "$0"; exit 2 ;;
+  *) sed -n '2,50p' "$0"; exit 2 ;;
 esac

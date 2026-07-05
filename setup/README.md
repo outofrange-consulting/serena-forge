@@ -110,21 +110,23 @@ bash serena-forge/setup/migrate-wsl.sh restore ~/wsl-migration-<date>.tar.gz
 bash serena-forge/setup/install-wsl.sh
 ```
 
-**Export carries**: Claude Code auth + MCP OAuth (`~/.claude/.credentials.json`,
-`~/.claude.json`), **ALL Claude memory, sessions or not** — user memory
-(`~/.claude/CLAUDE.md` + `~/.claude/rules/`), **auto memory**
-(`~/.claude/projects/<project>/memory/` — MEMORY.md + topic files, Claude's
-own accumulated learning, machine-local and not in git — plus a custom
-`autoMemoryDirectory` if configured), and per-repo local memory (below) —
-the rest of `~/.claude` (settings, keybindings, `commands/`, `agents/`,
-hooks, output-styles, prompt history, …) minus rebuildable state
-(`plugins/`, shell-snapshots, statsig, ide, caches); **personal skills are
-filtered**: only `azdo-pr` migrates by default (`--keep-skill=NAME`
-repeatable — the rest is superseded by what the installer sets up, dropped
-ones listed in the report); session-tied data (`projects/` transcripts,
-`todos/`, `file-history/` rewind checkpoints) with `--with-sessions` — plus
-`gh` / git / ssh / az / acli / NuGet / npm auth,
-this setup's `secrets.env`, the second brain's `.env` (the repo itself is
+**Export carries — auth + MEMORY + one skill, nothing else** (the whole
+point: a clean machine where the installer rebuilds the harness):
+
+- **Auth**: Claude Code + MCP OAuth (`~/.claude/.credentials.json`,
+  `~/.claude.json`), plus `gh` / git / ssh / az / acli / NuGet / npm auth
+  and this setup's `secrets.env`;
+- **Memory**: user memory (`~/.claude/CLAUDE.md` + `~/.claude/rules/`),
+  **auto memory** (`~/.claude/projects/<project>/memory/` — MEMORY.md +
+  topic files, Claude's own accumulated learning, machine-local and not in
+  git — plus a custom `autoMemoryDirectory` if configured), and per-repo
+  local memory (below);
+- **Skills**: ONLY `azdo-pr` by default (`--keep-skill=NAME` repeatable) —
+  dropped ones listed in the report;
+- **Nothing else from `~/.claude`**: no settings, keybindings, `commands/`,
+  `agents/`, hooks, history, todos, sessions, plugins.
+
+Export also carries the second brain's `.env` (the repo itself is
 re-cloned from its remote — or archived in full if it has none), a
 **manifest of every git repo under `~/sources`** (origin, branch,
 `.git/config` — **linked worktrees excluded**, repos re-cloned cleanly on
@@ -141,7 +143,7 @@ trees, unpushed commits, stashes (not migrated), repos without a remote
 pushed. Fix the report, re-run, then wipe the old distro.
 
 Flags: `--sources=DIR` (default `~/sources`), `--brain=DIR` (default
-`~/second-brain`), `--out=FILE`, `--keep=REL` (repeatable), `--with-sessions`.
+`~/second-brain`), `--out=FILE`, `--keep=REL` (repeatable), `--keep-skill=NAME` (repeatable).
 
 ## After the first run
 

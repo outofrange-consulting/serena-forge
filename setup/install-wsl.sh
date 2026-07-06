@@ -196,6 +196,36 @@ ensure_base_deps() {
   ok "base packages present"
 }
 
+# A browser opener is required for every device-code / OAuth flow the rest of
+# this script triggers (gh auth login, az login, claude, miro). The distro way
+# is the `wslu` package (provides `wslview`), but it is absent from fresh/devel
+# Ubuntu images (e.g. 26.04). Fall back to a tiny shim that bridges to the
+# Windows default browser via PowerShell — dependency-free and repo-independent.
+ensure_browser_opener() {
+  say "Browser opener (device-code / OAuth flows)"
+  if have wslview; then ok "wslview present ($(command -v wslview))"; return; fi
+  if apt_install wslu 2>/dev/null && have wslview; then
+    ok "wslu installed (wslview)"; return
+  fi
+  local ps='/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe'
+  if [ ! -x "$ps" ]; then warn "no wslu and no powershell.exe — browser flows may fail"; return; fi
+  mkdir -p "$HOME/.local/bin"
+  local name
+  for name in wslview xdg-open; do
+    cat > "$HOME/.local/bin/$name" <<'SH'
+#!/bin/sh
+# Managed by serena-forge setup/install-wsl.sh — regenerated on every run.
+# WSL browser opener bridging to the Windows default browser (wslu fallback).
+[ -n "$1" ] || exit 0
+exec /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command "Start-Process '$1'"
+SH
+    chmod +x "$HOME/.local/bin/$name"
+  done
+  hash -r 2>/dev/null || true
+  have wslview && ok "wslview/xdg-open shim installed (-> Windows browser)" \
+               || warn "wslview shim created but not on PATH yet — open a new shell"
+}
+
 ensure_gh() {  # dev-team (upstream) requires gh; also used to clone private repos
   if have gh && [ "$NO_UPDATE" = 1 ]; then ok "gh $(gh --version | head -1)"; return; fi
   say "Installing/updating GitHub CLI (gh)"
@@ -942,6 +972,7 @@ grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null || [ -n "${WSL_DISTRO_NAME:-
 setup_env_wiring
 load_secrets
 ensure_base_deps
+ensure_browser_opener   # wslview/xdg-open before any device-code flow (gh/az/claude/miro)
 ensure_gh
 ensure_node
 ensure_uv

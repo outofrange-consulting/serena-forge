@@ -139,6 +139,14 @@ do_export() {
   say "Auth"
   for rel in "${AUTH_PATHS[@]}"; do
     p="$HOME/$rel"
+    # Never carry a Windows-interop symlink (e.g. ~/.azure -> /mnt/c/Users/.../.azure).
+    # Those couple the fresh native distro back to Windows; tools recreate a
+    # native dir instead (az devops login repopulates ~/.azure from the PAT).
+    if [ -L "$p" ]; then
+      case "$(readlink "$p")" in
+        /mnt/c*|/c/*) report "skipped Windows symlink: $rel -> $(readlink "$p")"; continue ;;
+      esac
+    fi
     if [ -e "$p" ]; then
       mkdir -p "$stage/home/$(dirname "$rel")"
       cp -a "$p" "$stage/home/$(dirname "$rel")/" && ok "$rel"

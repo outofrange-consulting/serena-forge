@@ -553,16 +553,11 @@ ensure_az_devops() {
         && ok "az devops logged in ($AZURE_DEVOPS_ORG)" \
         || warn "az devops login failed — check the PAT"
     fi
-    # The @azure-devops/mcp server (user scope) reads AZURE_DEVOPS_EXT_PAT from
-    # env.sh at runtime. Register it here so serena-forge owns the whole MCP set
-    # — the migration no longer carries ~/.claude.json (which used to bring it).
-    if have claude && ! claude mcp get azure-devops >/dev/null 2>&1; then
-      claude mcp add -s user azure-devops -- npx -y @azure-devops/mcp "$AZURE_DEVOPS_ORG" --authentication pat --domains repositories pipelines search >/dev/null 2>&1 \
-        && ok "azure-devops MCP registered (user scope, $AZURE_DEVOPS_ORG)" \
-        || warn "azure-devops MCP registration failed — run: claude mcp add -s user azure-devops -- npx -y @azure-devops/mcp $AZURE_DEVOPS_ORG --authentication pat --domains repositories pipelines search"
-    fi
   fi
 }
+# NB: no azure-devops MCP by design — the azure-devops skill drives everything
+# through the `az` CLI (az repos pr / az devops invoke), so there is no MCP
+# server to register here.
 
 # ---------------------------------------------------------------------------
 # dev-team tooling — what upstream /init-dev-team expects on the machine:
@@ -769,6 +764,25 @@ EOF
   fi
 }
 
+register_vault_rag_user() {  # user-scope vault-rag MCP via a cd-wrapper (works from any cwd)
+  local wrapper="$HOME/.local/bin/vault-rag-server.sh"
+  mkdir -p "$HOME/.local/bin"
+  cat > "$wrapper" <<EOF
+#!/bin/sh
+# Managed by serena-forge setup/install-wsl.sh — regenerated on every run.
+# Serves the second-brain vault-rag MCP to EVERY Claude Code session (user scope);
+# cd into the brain first so rag/launch.sh's relative paths resolve from any cwd.
+cd "$BRAIN_DIR" || exit 1
+exec /bin/sh rag/launch.sh
+EOF
+  chmod +x "$wrapper"
+  if have claude && ! claude mcp get vault-rag >/dev/null 2>&1; then
+    claude mcp add -s user vault-rag -- "$wrapper" >/dev/null 2>&1 \
+      && ok "vault-rag MCP registered (user scope)" \
+      || warn "vault-rag MCP registration failed — run: claude mcp add -s user vault-rag -- $wrapper"
+  fi
+}
+
 ensure_second_brain() {
   [ "$SKIP_BRAIN" = 1 ] && return 0
   say "Second brain ($BRAIN_DIR)"
@@ -794,6 +808,7 @@ ensure_second_brain() {
     say "Installing the RAG engine (npm install in rag/)"
     (cd "$BRAIN_DIR/rag" && npm install --no-fund --no-audit --silent) \
       && ok "RAG engine ready" || warn "npm install failed in $BRAIN_DIR/rag"
+    register_vault_rag_user   # user-scope MCP (the $BRAIN_DIR/.mcp.json above stays for verify-rag)
     if [ -f "$BRAIN_DIR/scripts/verify-rag.mjs" ]; then
       say "RAG smoke test — indexing the vault (first run also fetches the embedder; can take a while)"
       local rag_lr rag_log rag_pid rag_done=0 rag_total=0

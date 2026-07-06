@@ -14,10 +14,12 @@
 #                     ponytail@ponytail (upstream DietrichGebert/ponytail)
 #   Skills (~/.claude/skills) : atlassian (acli), context7 (from
 #                     outofrange-consulting/omp-dev-team) + azure-devops
-#                     (this repo, drives `az devops`)
+#                     (ADO + PR lifecycle), aspire-cli, datadog (pup CLI —
+#                     replaces the per-surface dd-* skills)
 #   CLI tools       : ctx-wire (+ shims + git/dotnet filters), acli (Atlassian),
 #                     az + azure-devops extension, ctx7 (docs CLI),
-#                     agent-of-empires (aoe — multi-agent tmux manager),
+#                     aspire (.NET Aspire CLI, self-contained), pup (Datadog
+#                     CLI, EU site), agent-of-empires (aoe — tmux manager),
 #                     Docker Engine (native WSL — no Docker Desktop)
 #   dev-team tooling: CodeGraph, ast-grep, semgrep, Stryker.NET (global) —
 #                     Stryker JS / pitest stay per-project (/init-dev-team)
@@ -96,7 +98,7 @@ write_env_file() {
 # Sourced from ~/.profile, ~/.bashrc (top) and ~/.zshenv so PATH is correct
 # even in non-interactive shells (Claude Code's Bash tool, cron, ssh cmd…).
 # Written `set -e`-safe: only if-statements, no bare && lists.
-for _d in "$HOME/.local/bin" "$HOME/.dotnet" "$HOME/.dotnet/tools"; do
+for _d in "$HOME/.local/bin" "$HOME/.dotnet" "$HOME/.dotnet/tools" "$HOME/.aspire/bin"; do
   if [ -d "$_d" ]; then
     case ":$PATH:" in *":$_d:"*) ;; *) PATH="$_d:$PATH" ;; esac
   fi
@@ -105,6 +107,8 @@ unset _d
 export PATH
 if [ -d "$HOME/.dotnet" ]; then export DOTNET_ROOT="$HOME/.dotnet"; fi
 export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+# Datadog (pup CLI + dd tracers): default org is the EU site.
+export DD_SITE=datadoghq.eu
 if [ -f "$HOME/.config/claude-tools/secrets.env" ]; then
   . "$HOME/.config/claude-tools/secrets.env"
 fi
@@ -384,6 +388,8 @@ ensure_skills() {
   install_skill "$td/atlassian" atlassian
   install_skill "$td/context7"  context7
   install_skill "$ROOT/setup/skills/azure-devops" azure-devops
+  install_skill "$ROOT/setup/skills/aspire-cli"   aspire-cli
+  install_skill "$ROOT/setup/skills/datadog"      datadog
   # caveman/yagni used to be mirrored here; they now come from the upstream
   # plugins (caveman@caveman, ponytail@ponytail) — drop stale copies so the
   # plugin versions are the only ones loaded.
@@ -793,6 +799,8 @@ doctor() {
   check semgrep  optional "semgrep --version"
   check acli     optional "acli --version"
   check az       optional
+  check aspire   optional "aspire --version"
+  check pup      optional "pup --version"
   # Fresh-login-shell visibility: catches PATH wiring that only lives in this
   # process. If this fails, the profile wiring above did not take.
   for t in claude node; do
@@ -800,6 +808,52 @@ doctor() {
       && warn "$t is not visible from a fresh login shell — check ~/.profile"
   done
   [ "$fail" = 0 ] && bold "All set ✓" || { bold "Finished with warnings — see above"; return 1; }
+}
+
+# ---------------------------------------------------------------------------
+# .NET Aspire CLI (standalone, self-contained) + pup (Datadog CLI)
+# ---------------------------------------------------------------------------
+ensure_aspire() {  # Aspire CLI is a self-contained binary; the SDK + Docker (installed
+                   # above) are only needed to RUN Aspire apps, not for the CLI itself.
+  local abin="$HOME/.aspire/bin/aspire"
+  if [ -x "$abin" ] && [ "$NO_UPDATE" = 1 ]; then ok "aspire $("$abin" --version 2>/dev/null | head -1)"; return 0; fi
+  say "Installing/updating .NET Aspire CLI (~/.aspire/bin)"
+  # Official installer. --skip-path: env.sh owns PATH (it already adds ~/.aspire/bin).
+  if curl -fsSL https://aka.ms/aspire/get/install.sh | bash -s -- --skip-path >/dev/null 2>&1; then
+    ok "aspire $("$abin" --version 2>/dev/null | head -1)"
+  else
+    warn "aspire CLI install failed — see https://aspire.dev"
+  fi
+}
+
+ensure_pup() {  # Datadog CLI — prebuilt release binary into ~/.local/bin; EU site via env.sh
+  local arch ver asset url tmp bin
+  case "$(uname -m)" in
+    x86_64|amd64) arch=x86_64 ;; aarch64|arm64) arch=arm64 ;;
+    *) warn "pup: unsupported arch $(uname -m)"; return 0 ;;
+  esac
+  if have pup && [ "$NO_UPDATE" = 1 ]; then ok "pup $(pup --version 2>/dev/null | head -1)"; return 0; fi
+  say "Installing/updating pup (Datadog CLI, EU site)"
+  ver="$(curl -fsSL https://api.github.com/repos/DataDog/pup/releases/latest 2>/dev/null | jq -r '.tag_name // empty')"
+  [ -n "$ver" ] || { warn "pup: could not resolve latest release (GitHub API)"; return 0; }
+  asset="pup_${ver#v}_Linux_${arch}.tar.gz"
+  url="https://github.com/DataDog/pup/releases/download/${ver}/${asset}"
+  tmp="$(mktemp -d)"
+  if curl -fsSL "$url" -o "$tmp/pup.tgz" && tar -xzf "$tmp/pup.tgz" -C "$tmp"; then
+    bin="$(find "$tmp" -type f -name pup | head -1)"
+    if [ -n "$bin" ] && install -m 0755 "$bin" "$HOME/.local/bin/pup"; then
+      ok "pup $("$HOME/.local/bin/pup" --version 2>/dev/null | head -1)"
+    else
+      warn "pup: could not install binary into ~/.local/bin"
+    fi
+  else
+    warn "pup: download failed ($url)"
+  fi
+  rm -rf "$tmp"
+  # OAuth token (~1h). Don't block the run — just flag if unauthenticated.
+  if have pup && ! pup auth status >/dev/null 2>&1; then
+    warn "pup not authenticated — run: pup auth login (browser OAuth, EU site)"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -828,6 +882,8 @@ ensure_codegraph
 ensure_ast_grep
 ensure_semgrep
 ensure_dotnet_tools
+ensure_aspire
+ensure_pup
 ensure_acli
 ensure_az_devops
 ensure_miro

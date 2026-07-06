@@ -293,13 +293,18 @@ do_restore() {
   [ -f "$HOME/.config/claude-tools/secrets.env" ] && . "$HOME/.config/claude-tools/secrets.env" 2>/dev/null || true
   ADO_PAT="${AZURE_DEVOPS_EXT_PAT:-${AZURE_DEVOPS_PAT:-}}"
   if [ -n "$ADO_PAT" ]; then
-    export AZURE_DEVOPS_EXT_PAT="$ADO_PAT"
-    # Credential helper reads the PAT at runtime — never baked into ~/.gitconfig;
-    # env.sh keeps AZURE_DEVOPS_EXT_PAT exported for every future shell too.
+    # EXPORT so git's credential-helper subshell inherits it (secrets.env only
+    # sets, does not export). GIT_TERMINAL_PROMPT=0 => a bad PAT fails fast.
+    export AZURE_DEVOPS_EXT_PAT="$ADO_PAT" GIT_TERMINAL_PROMPT=0
+    # A restored ~/.gitconfig may carry a Git Credential Manager helper set to
+    # OAuth for Azure DevOps — non-interactively that HANGS on a browser/device
+    # flow. Drop inherited global helpers (GCM) and feed the PAT ourselves.
+    git config --global --unset-all credential.helper 2>/dev/null || true
+    git config --global --unset-all credential."https://dev.azure.com".helper 2>/dev/null || true
     git config --global credential."https://dev.azure.com".username pat
     git config --global credential."https://dev.azure.com".helper \
-      '!f() { test "$1" = get && printf "password=%s\n" "$AZURE_DEVOPS_EXT_PAT"; }; f'
-    ok "GitHub -> SSH, Azure DevOps -> PAT (from secrets.env)"
+      '!f() { test "$1" = get && printf "username=pat\npassword=%s\n" "$AZURE_DEVOPS_EXT_PAT"; }; f'
+    ok "GitHub -> SSH, Azure DevOps -> PAT (from secrets.env; GCM dropped)"
   else
     warn "no Azure DevOps PAT in secrets.env — ADO repos will fail to clone"
   fi

@@ -734,9 +734,14 @@ index_repos() {
     repo="$(dirname "$gitdir")"; count=$((count + 1))
     if have uvx && [ -n "$(find "$repo" -maxdepth 3 \( -name '*.sln' -o -name '*.csproj' \) -not -path '*/bin/*' -not -path '*/obj/*' -print -quit 2>/dev/null)" ]; then
       say "Serena: indexing $repo (Roslyn — can take a while on first run)"
+      # --language csharp: skip Serena's language inference. Without it, when no
+      # .serena/project.yml exists yet Serena auto-creates one and, on detecting
+      # stray python/js/shell files, prompts "enable <lang> too?" — which reads
+      # EOF under run_ticking's </dev/null and dies at ~0.1s (before Roslyn).
+      # The enclosing `if` already restricts this to repos with a .sln/.csproj.
       run_ticking "serena index $(basename "$repo")" "$repo" \
-        uvx -p 3.13 --from git+https://github.com/oraios/serena serena project index "$repo" \
-        && ok "  serena index" || warn "  serena index failed (.NET 9 target? LSP cold start?)"
+        uvx -p 3.13 --from git+https://github.com/oraios/serena serena project index --language csharp "$repo" \
+        && ok "  serena index" || warn "  serena index failed"
     fi
   done < <(find "$root" -maxdepth 3 -name .git \( -type d -o -type f \) -not -path '*/node_modules/*' 2>/dev/null)
   [ "$count" = 0 ] && warn "no git repos found under $root" || ok "$count repo(s) scanned (Serena on C# repos)"

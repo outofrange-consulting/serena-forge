@@ -280,6 +280,10 @@ ensure_dotnet() {  # Serena's C# backend (Roslyn) requires .NET 10+ (NOT 9)
     rm -f "$tmp"
   fi
   export DOTNET_ROOT="$HOME/.dotnet"
+  # Put the freshly-installed SDK on THIS process's PATH — env.sh (sourced at
+  # startup) only added dirs that existed then, so ~/.dotnet was skipped. Without
+  # this, the steps below, the dotnet global tools, and doctor would all miss it.
+  case ":$PATH:" in *":$HOME/.dotnet:"*) ;; *) export PATH="$HOME/.dotnet:$HOME/.dotnet/tools:$PATH" ;; esac
   have dotnet || return 0
   # ASP.NET Core HTTPS dev certificate (creation only — Linux trust is manual).
   dotnet dev-certs https >/dev/null 2>&1 || true
@@ -649,6 +653,20 @@ EOF
   ok "root-graph routing note written to ~/.claude/CLAUDE.md (managed block)"
 }
 
+run_ticking() {  # run_ticking "<label>" "<workdir>" <cmd...> — quiet cmd + live elapsed heartbeat
+  local label="$1" wd="$2"; shift 2
+  local pid s=0 rc=0
+  ( cd "$wd" && "$@" ) </dev/null >/dev/null 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    printf '\r  … %s (%ds)   ' "$label" "$s"
+    sleep 2; s=$((s + 2))
+  done
+  printf '\r\033[K'
+  wait "$pid" || rc=$?
+  return "$rc"
+}
+
 index_repos() {
   [ "$SKIP_INDEX" = 1 ] && return 0
   say "Repo indexing (CodeGraph at the root + Serena per repo)"
@@ -661,10 +679,10 @@ index_repos() {
   if have codegraph; then
     if [ -d "$root/.codegraph" ]; then
       say "CodeGraph: syncing the root graph ($root)"
-      (cd "$root" && codegraph sync >/dev/null 2>&1) && ok "codegraph sync" || warn "codegraph sync failed"
+      run_ticking "codegraph sync" "$root" codegraph sync && ok "codegraph sync" || warn "codegraph sync failed"
     else
       say "CodeGraph: building the root graph ($root — first run can take a while)"
-      (cd "$root" && codegraph init -i >/dev/null 2>&1) && ok "codegraph init" || warn "codegraph init failed"
+      run_ticking "codegraph init (first build)" "$root" codegraph init -i && ok "codegraph init" || warn "codegraph init failed"
     fi
     [ -d "$root/.codegraph" ] && { register_codegraph_root "$root"; write_codegraph_claude_md "$root"; }
   fi
@@ -674,8 +692,8 @@ index_repos() {
     repo="$(dirname "$gitdir")"; count=$((count + 1))
     if have uvx && [ -n "$(find "$repo" -maxdepth 3 \( -name '*.sln' -o -name '*.csproj' \) -not -path '*/bin/*' -not -path '*/obj/*' -print -quit 2>/dev/null)" ]; then
       say "Serena: indexing $repo (Roslyn — can take a while on first run)"
-      uvx -p 3.13 --from git+https://github.com/oraios/serena \
-        serena project index "$repo" >/dev/null 2>&1 \
+      run_ticking "serena index $(basename "$repo")" "$repo" \
+        uvx -p 3.13 --from git+https://github.com/oraios/serena serena project index "$repo" \
         && ok "  serena index" || warn "  serena index failed (.NET 9 target? LSP cold start?)"
     fi
   done < <(find "$root" -maxdepth 3 -name .git \( -type d -o -type f \) -not -path '*/node_modules/*' 2>/dev/null)
@@ -832,14 +850,18 @@ doctor() {
 ensure_aspire() {  # Aspire CLI is a self-contained binary; the SDK + Docker (installed
                    # above) are only needed to RUN Aspire apps, not for the CLI itself.
   local abin="$HOME/.aspire/bin/aspire"
-  if [ -x "$abin" ] && [ "$NO_UPDATE" = 1 ]; then ok "aspire $("$abin" --version 2>/dev/null | head -1)"; return 0; fi
-  say "Installing/updating .NET Aspire CLI (~/.aspire/bin)"
-  # Official installer. --skip-path: env.sh owns PATH (it already adds ~/.aspire/bin).
-  if curl -fsSL https://aka.ms/aspire/get/install.sh | bash -s -- --skip-path >/dev/null 2>&1; then
-    ok "aspire $("$abin" --version 2>/dev/null | head -1)"
-  else
-    warn "aspire CLI install failed — see https://aspire.dev"
+  if ! { [ -x "$abin" ] && [ "$NO_UPDATE" = 1 ]; }; then
+    say "Installing/updating .NET Aspire CLI (~/.aspire/bin)"
+    # --skip-path: env.sh owns PATH; we add ~/.aspire/bin to THIS process below.
+    curl -fsSL https://aka.ms/aspire/get/install.sh | bash -s -- --skip-path >/dev/null 2>&1 \
+      || warn "aspire CLI install failed — see https://aspire.dev"
   fi
+  # env.sh only added dirs existing at startup, so put ~/.aspire/bin on this
+  # process's PATH now — otherwise doctor reports aspire as missing.
+  if [ -d "$HOME/.aspire/bin" ]; then
+    case ":$PATH:" in *":$HOME/.aspire/bin:"*) ;; *) export PATH="$HOME/.aspire/bin:$PATH" ;; esac
+  fi
+  if [ -x "$abin" ]; then ok "aspire $("$abin" --version 2>/dev/null | head -1)"; fi
 }
 
 ensure_pup() {  # Datadog CLI — prebuilt release binary into ~/.local/bin; EU site via env.sh

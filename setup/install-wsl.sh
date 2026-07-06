@@ -320,15 +320,24 @@ ensure_dotnet_tools() {  # global tools the dev-team workflow leans on
 # Claude Code
 # ---------------------------------------------------------------------------
 ensure_claude() {
-  if have claude; then
-    if [ "$NO_UPDATE" = 1 ]; then ok "claude $(claude --version 2>/dev/null | head -1)"
-    else say "Updating Claude Code"; claude update >/dev/null 2>&1 || true; ok "claude $(claude --version 2>/dev/null | head -1)"; fi
-  else
-    say "Installing Claude Code"
-    curl -fsSL https://claude.ai/install.sh | bash || { warn "Claude Code install failed"; return 1; }
-    hash -r 2>/dev/null || true
-    have claude && ok "claude $(claude --version 2>/dev/null | head -1)" || warn "claude not on PATH yet — open a new shell and re-run"
-  fi
+  # `command -v claude` on a fresh WSL finds the *Windows* npm install through
+  # the drive mount (/mnt/c, or /c with automount root=/). That is win32 Claude
+  # seen via interop — it reports platform win32 with a UNC cwd, not a native
+  # Linux Claude Code. Treat any interop-path (or missing) claude as "not
+  # installed" and lay down the native build; only a real Linux path updates.
+  local cur; cur="$(command -v claude 2>/dev/null || true)"
+  case "$cur" in
+    ""|/mnt/*|/c/*)
+      say "Installing Claude Code (native Linux)"
+      curl -fsSL https://claude.ai/install.sh | bash || { warn "Claude Code install failed"; return 1; }
+      hash -r 2>/dev/null || true
+      have claude && ok "claude $(claude --version 2>/dev/null | head -1)" || warn "claude not on PATH yet — open a new shell and re-run"
+      ;;
+    *)
+      if [ "$NO_UPDATE" = 1 ]; then ok "claude $(claude --version 2>/dev/null | head -1)"
+      else say "Updating Claude Code"; claude update >/dev/null 2>&1 || true; ok "claude $(claude --version 2>/dev/null | head -1)"; fi
+      ;;
+  esac
 }
 
 # ---------------------------------------------------------------------------
@@ -822,6 +831,12 @@ doctor() {
   check jq       required "jq --version"
   check gh       required "gh --version"
   check claude   required "claude --version"
+  # `have`-based check above passes a claude reached through the Windows drive
+  # mount — but that is win32 Claude via interop (win32 platform, UNC cwd), not
+  # a native Linux Claude Code. Flag it loudly so it never masquerades as green.
+  case "$(command -v claude 2>/dev/null)" in
+    /mnt/*|/c/*) warn "claude resolves to the Windows install ($(command -v claude)) — native Linux Claude Code is NOT on PATH; re-run to install it"; fail=1;;
+  esac
   check uvx      required "uvx --version"
   check dotnet   optional "dotnet --version"
   check ctx-wire optional "ctx-wire --version"

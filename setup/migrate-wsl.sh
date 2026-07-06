@@ -119,8 +119,10 @@ KEEP_SKILLS=()
 
 # Per-repo LOCAL memory that a clean re-clone loses (untracked/ignored files).
 # Saved per repo on export, overlaid after clone on restore WITHOUT overwriting
-# anything the clone brought back.
-REPO_LOCAL_PATHS=(CLAUDE.local.md .claude/settings.local.json .claude/CLAUDE.local.md .env .env.local .mcp.local.json)
+# anything the clone brought back. `memory` is the dev-team orchestrator's
+# per-repo dir (decisions.md, recon-*, plan-*, rca-*) written when Claude is
+# launched from inside a repo — it is untracked, so without this it is lost.
+REPO_LOCAL_PATHS=(CLAUDE.local.md .claude/settings.local.json .claude/CLAUDE.local.md .env .env.local .mcp.local.json memory)
 
 is_worktree() { [ -f "$1/.git" ]; }   # linked worktree/submodule: .git is a FILE
 
@@ -281,6 +283,25 @@ do_restore() {
     chmod 600 "$HOME/.git-credentials" "$HOME/.claude/.credentials.json" \
               "$HOME/.config/claude-tools/secrets.env" 2>/dev/null || true
     ok "restored (ssh/credentials re-chmodded)"
+  fi
+
+  # Re-clones must authenticate WITHOUT the old machine's (often stale) gh token:
+  # GitHub over SSH (registered key, restored above), Azure DevOps with the PAT
+  # from the just-restored secrets.env. Done before any clone below.
+  say "Git auth for re-clones (GitHub -> SSH, Azure DevOps -> PAT)"
+  git config --global url."git@github.com:".insteadOf "https://github.com/" || true
+  [ -f "$HOME/.config/claude-tools/secrets.env" ] && . "$HOME/.config/claude-tools/secrets.env" 2>/dev/null || true
+  ADO_PAT="${AZURE_DEVOPS_EXT_PAT:-${AZURE_DEVOPS_PAT:-}}"
+  if [ -n "$ADO_PAT" ]; then
+    export AZURE_DEVOPS_EXT_PAT="$ADO_PAT"
+    # Credential helper reads the PAT at runtime — never baked into ~/.gitconfig;
+    # env.sh keeps AZURE_DEVOPS_EXT_PAT exported for every future shell too.
+    git config --global credential."https://dev.azure.com".username pat
+    git config --global credential."https://dev.azure.com".helper \
+      '!f() { test "$1" = get && printf "password=%s\n" "$AZURE_DEVOPS_EXT_PAT"; }; f'
+    ok "GitHub -> SSH, Azure DevOps -> PAT (from secrets.env)"
+  else
+    warn "no Azure DevOps PAT in secrets.env — ADO repos will fail to clone"
   fi
 
   say "Second brain -> $BRAIN"

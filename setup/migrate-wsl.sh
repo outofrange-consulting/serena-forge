@@ -33,8 +33,8 @@
 #               .git-file dirs are linked worktrees): origin URL, current branch,
 #               HEAD, and the repo's .git/config. Repos are NOT archived —
 #               restore re-clones them cleanly and puts the saved config back.
-#   Keep-dirs : full copies (default: daft-punk, dom-order-api/docs, ai-journey,
-#               teams-graph, litellm-cpa-gateway, memory — rel. to sources dir).
+#   Keep-dirs : full copies (default: daft-punk, dom-order-api/docs, teams-graph,
+#               litellm-cpa-gateway, memory, ai-journey/{deck,scripts,artifacts}).
 #
 # What EXPORT verifies (report.txt, also printed):
 #   per repo: dirty working tree, unpushed commits, stashes, no remote;
@@ -69,7 +69,11 @@ for a in "$@"; do case "$a" in
   -h|--help) sed -n '2,52p' "$0"; exit 0 ;;
   *) [ -z "$ARCHIVE" ] && ARCHIVE="$a" || { echo "unknown arg: $a" >&2; exit 2; } ;;
 esac; done
-[ "${#KEEPS[@]}" = 0 ] && KEEPS=("daft-punk" "dom-order-api/docs" "ai-journey" "teams-graph" "litellm-cpa-gateway" "memory")
+# ai-journey: keep only decks/scripts/artifacts/readme — its raw/ (session copies),
+# db/ (rebuildable index) and .venv/ are excluded (sessions already migrate via
+# ~/.claude/projects, so re-copying them here would just duplicate ~1 GB).
+[ "${#KEEPS[@]}" = 0 ] && KEEPS=("daft-punk" "dom-order-api/docs" "teams-graph" "litellm-cpa-gateway" "memory" \
+  "ai-journey/deck" "ai-journey/scripts" "ai-journey/artifacts" "ai-journey/README-BASE.md")
 
 # Home-relative paths worth carrying (auth). Missing ones are skipped.
 AUTH_PATHS=(

@@ -21,8 +21,8 @@
 #                 overlaid after clone without overwriting committed files.
 #   SESSIONS  : ~/.claude/projects (transcripts — token stats + resume),
 #               ~/.claude/sessions, ~/.claude/todos, ~/.claude/history.jsonl.
-#   Skills    : ONLY the ones in KEEP_SKILLS (default: azdo-pr;
-#               --keep-skill=NAME repeatable).
+#   Skills    : ONLY the ones in KEEP_SKILLS (default: NONE — all superseded
+#               by install-wsl.sh; --keep-skill=NAME repeatable to opt one in).
 #   NOTHING else from ~/.claude migrates — no settings, keybindings,
 #   commands/, agents/, hooks, plugins. The whole point: a clean machine
 #   where install-wsl.sh rebuilds the harness.
@@ -46,7 +46,7 @@
 #   --keep=REL         extra path to copy in full, relative to sources
 #                      (repeatable; replaces defaults when given)
 #   --out=FILE         archive path (default ~/wsl-migration-<date>.tar.gz)
-#   --keep-skill=NAME  personal skill to migrate (repeatable; default azdo-pr)
+#   --keep-skill=NAME  personal skill to migrate (repeatable; default: none)
 # Flags (restore):
 #   --sources=DIR      where to re-clone (default ~/sources)
 #   --brain=DIR        default ~/second-brain
@@ -100,9 +100,10 @@ CLAUDE_MEMORY_PATHS=(
   .claude/projects .claude/sessions .claude/todos .claude/history.jsonl
 )
 
-# Personal skills to migrate (the rest of ~/.claude/skills is superseded by
-# what install-wsl.sh reinstalls). Override with repeated --keep-skill=NAME.
-KEEP_SKILLS=(azdo-pr)
+# Personal skills to migrate. Default: NONE — every ~/.claude/skills entry is
+# superseded by what install-wsl.sh reinstalls (azdo-pr's logic now lives in the
+# azure-devops skill it installs). Opt in with repeated --keep-skill=NAME.
+KEEP_SKILLS=()
 [ "${#KEEP_SKILLS_OVERRIDE[@]}" = 0 ] || KEEP_SKILLS=("${KEEP_SKILLS_OVERRIDE[@]}")
 
 # Per-repo LOCAL memory that a clean re-clone loses (untracked/ignored files).
@@ -158,19 +159,21 @@ do_export() {
     # Personal skills: only KEEP_SKILLS migrate (the rest is superseded by
     # install-wsl.sh); dropped ones are listed in the report.
     local s
-    for s in "${KEEP_SKILLS[@]}"; do
-      if [ -d "$HOME/.claude/skills/$s" ]; then
-        mkdir -p "$stage/home/.claude/skills"
-        cp -a "$HOME/.claude/skills/$s" "$stage/home/.claude/skills/" && ok "skill kept: $s"
-      else
-        report "skill to keep not found: $s"
-      fi
-    done
+    if [ "${#KEEP_SKILLS[@]}" -gt 0 ]; then
+      for s in "${KEEP_SKILLS[@]}"; do
+        if [ -d "$HOME/.claude/skills/$s" ]; then
+          mkdir -p "$stage/home/.claude/skills"
+          cp -a "$HOME/.claude/skills/$s" "$stage/home/.claude/skills/" && ok "skill kept: $s"
+        else
+          report "skill to keep not found: $s"
+        fi
+      done
+    fi
     if [ -d "$HOME/.claude/skills" ]; then
       for s in "$HOME/.claude/skills"/*/; do
         [ -d "$s" ] || continue
         s="$(basename "$s")"
-        case " ${KEEP_SKILLS[*]} " in *" $s "*) ;; *) printf 'skill dropped (superseded by setup): %s\n' "$s" >> "$stage/report.txt" ;; esac
+        case " ${KEEP_SKILLS[*]:-} " in *" $s "*) ;; *) printf 'skill dropped (superseded by setup): %s\n' "$s" >> "$stage/report.txt" ;; esac
       done
     fi
   else

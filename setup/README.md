@@ -24,7 +24,7 @@ bash serena-forge/setup/install-wsl.sh -y
 | .NET extras | telemetry opt-out (`DOTNET_CLI_TELEMETRY_OPTOUT`/`DOTNET_NOLOGO` in env.sh), HTTPS dev cert (`dotnet dev-certs https`), **Azure Artifacts NuGet credential provider** (private `pkgs.dev.azure.com` feeds auth with `AZURE_DEVOPS_EXT_PAT`), global tools: `dotnet-ef`, `dotnet-stryker`, `dotnet-reportgenerator-globaltool`, `dotnet-outdated-tool` |
 | Claude Code | native installer; `claude update` on re-run |
 | Plugins | `serena-forge@serena-forge` (this repo — symbolic C# enforcement, build safety net, destructive-command guard, all hooks included), `dev-team@bfinster` (**upstream** [bdfinst/agentic-dev-team](https://github.com/bdfinst/agentic-dev-team)), `caveman@caveman` (**upstream** [JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman)) and `ponytail@ponytail` (**upstream** [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail) — the YAGNI / laziest-senior-dev discipline) |
-| Skills (`~/.claude/skills`) | `atlassian` (drives `acli`), `context7` (drives `ctx7`) — mirrored from [omp-dev-team](https://github.com/outofrange-consulting/omp-dev-team)'s token-diet — plus `azure-devops` (this repo, drives `az devops`). Stale `caveman`/`yagni` mirrors from earlier runs are removed (they're upstream plugins now) |
+| Skills (`~/.claude/skills`) | `atlassian` (drives `acli`), `context7` (drives `ctx7`) — mirrored from [omp-dev-team](https://github.com/outofrange-consulting/omp-dev-team)'s token-diet — plus `azure-devops` (this repo — raw `az devops` layer **and** the full PR lifecycle + PR-linked Jira via `acli`). Stale `caveman`/`yagni` mirrors from earlier runs are removed (they're upstream plugins now) |
 | CLI tools | `ctx-wire` (+ shims + token-diet git/dotnet filters merged as a managed block), `acli` (Atlassian CLI + auth), `az` + `azure-devops` extension (+ PAT login + org/project defaults), `ctx7`, [`aoe`](https://github.com/agent-of-empires/agent-of-empires) (agent-of-empires — multi-agent tmux session manager, TUI + web dashboard; `tmux` installed with it), **Docker Engine** (native in WSL via the official apt repo — deliberately NOT Docker Desktop: no Windows-app dependency, no licensing, fully scriptable; `docker` group + systemd service enabled, `compose`/`buildx` plugins included) |
 | dev-team tooling | what upstream `/init-dev-team` expects: `jq` + `python3` (hard deps), **CodeGraph** (`codegraph upgrade` on re-run), plus `ast-grep`, `semgrep` (used by the `semgrep-analyze` skill) and a **global Stryker.NET** for the C# mutation gate. Stryker (JS) and pitest stay per-project by upstream design — run `/init-dev-team` inside a repo to wire those |
 | Repo indexing | prompts once for `CODE_ROOT` (your repos folder, persisted; or `--code-root=DIR`). **CodeGraph indexes the root itself** — one cross-repo graph (`codegraph init -i` first time, `codegraph sync` on re-run), served to every session by a **user-scope MCP server** (`codegraph`, via the `~/.local/bin/codegraph-root` wrapper) and advertised by a managed block in `~/.claude/CLAUDE.md`. **Serena indexes per repo**: every C# repo (`.sln`/`.csproj`) under the root gets `serena project index` to kill the Roslyn cold start |
@@ -52,7 +52,7 @@ prompted with `read -s` (nothing echoed) and persisted to
 - `ponytail` — installed as the **upstream plugin** `ponytail@ponytail` ([DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail)); this is the upstream of what token-diet shipped as `yagni`.
 - `context7` + `ctx7` — the `ctx7` npm CLI is published by the Context7 team (Upstash); the skill wrapping it is omp-dev-team's CLI-over-MCP take.
 - `atlassian` — omp-dev-team skill driving the official Atlassian `acli`.
-- `azure-devops` — authored in this repo, drives the official `az` CLI `azure-devops` extension (Boards, Repos/PRs — create/vote/complete/checkout, Pipelines).
+- `azure-devops` — authored in this repo. The single entry point for Azure DevOps: a raw `az devops` layer (Boards, Repos/PRs, Pipelines) **plus** the full PR lifecycle folded in from `azdo-pr` — open a PR (creating its Jira `LCT` ticket via `acli`), review the diff, diagnose a failing CI build from the Test Results API, handle comment threads, and move the linked ticket to Done on merge. The heavy workflows live in `references/`. It does not itself merge/complete a PR.
 - CodeGraph — [colbymchenry/codegraph](https://github.com/colbymchenry/codegraph), the tool upstream dev-team's `/init-dev-team` and its `codegraph-bootstrap` SessionStart hook expect.
 
 ## PATH — non-interactive shells included
@@ -124,8 +124,10 @@ point: a clean machine where the installer rebuilds the harness):
 - **Sessions**: `~/.claude/projects/` (transcripts — token stats + session
   resume; the auto-memory dirs ride along), `~/.claude/sessions/`,
   `~/.claude/todos/`, `~/.claude/history.jsonl`;
-- **Skills**: ONLY `azdo-pr` by default (`--keep-skill=NAME` repeatable) —
-  dropped ones listed in the report;
+- **Skills**: NONE by default — every personal skill is superseded by what
+  `install-wsl.sh` reinstalls (`azdo-pr`'s logic now lives in the `azure-devops`
+  skill). Opt one in with `--keep-skill=NAME` (repeatable); dropped ones are
+  listed in the report;
 - **Nothing else from `~/.claude`**: no settings, keybindings, `commands/`,
   `agents/`, hooks, plugins.
 

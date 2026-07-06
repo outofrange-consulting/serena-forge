@@ -553,6 +553,14 @@ ensure_az_devops() {
         && ok "az devops logged in ($AZURE_DEVOPS_ORG)" \
         || warn "az devops login failed — check the PAT"
     fi
+    # The @azure-devops/mcp server (user scope) reads AZURE_DEVOPS_EXT_PAT from
+    # env.sh at runtime. Register it here so serena-forge owns the whole MCP set
+    # — the migration no longer carries ~/.claude.json (which used to bring it).
+    if have claude && ! claude mcp get azure-devops >/dev/null 2>&1; then
+      claude mcp add -s user azure-devops -- npx -y @azure-devops/mcp "$AZURE_DEVOPS_ORG" --authentication pat --domains repositories pipelines search >/dev/null 2>&1 \
+        && ok "azure-devops MCP registered (user scope, $AZURE_DEVOPS_ORG)" \
+        || warn "azure-devops MCP registration failed — run: claude mcp add -s user azure-devops -- npx -y @azure-devops/mcp $AZURE_DEVOPS_ORG --authentication pat --domains repositories pipelines search"
+    fi
   fi
 }
 

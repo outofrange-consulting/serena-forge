@@ -6,8 +6,10 @@
 #                 then run setup/install-wsl.sh (finds your secrets/auth already in place)
 #
 # What EXPORT captures:
-#   Auth      : ~/.claude/.credentials.json + ~/.claude.json (Claude Code + MCP
-#               OAuth), ~/.config/gh (gh), ~/.gitconfig + ~/.git-credentials,
+#   Auth      : ~/.claude/.credentials.json (Claude Code login — NOT ~/.claude.json,
+#               which carries stale global mcpServers/plugins; install-wsl.sh
+#               rebuilds the MCP set clean), ~/.config/gh (gh),
+#               ~/.gitconfig + ~/.git-credentials,
 #               ~/.ssh, ~/.azure (az session), acli config, ~/.nuget NuGet.Config,
 #               ~/.npmrc, ~/.config/claude-tools/secrets.env (PATs of this setup)
 #   MEMORY    : * user memory: ~/.claude/CLAUDE.md + ~/.claude/rules/
@@ -76,8 +78,13 @@ esac; done
   "ai-journey/deck" "ai-journey/scripts" "ai-journey/artifacts" "ai-journey/README-BASE.md")
 
 # Home-relative paths worth carrying (auth). Missing ones are skipped.
+# NB: ~/.claude.json is deliberately NOT here. It holds the OLD machine's global
+# mcpServers / enabledPlugins (e.g. a dev-team cbm server) and per-project trust;
+# carrying it pollutes the fresh serena-forge world with stale MCP entries that
+# never get pruned. install-wsl.sh is the single source of truth for the MCP set
+# (serena plugin + codegraph + miro + azure-devops), so we start clean instead.
 AUTH_PATHS=(
-  .claude/.credentials.json .claude.json
+  .claude/.credentials.json
   .config/claude-tools/secrets.env
   .config/gh
   .gitconfig .git-credentials

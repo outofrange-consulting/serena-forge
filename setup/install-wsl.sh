@@ -760,9 +760,25 @@ ensure_second_brain() {
     (cd "$BRAIN_DIR/rag" && npm install --no-fund --no-audit --silent) \
       && ok "RAG engine ready" || warn "npm install failed in $BRAIN_DIR/rag"
     if [ -f "$BRAIN_DIR/scripts/verify-rag.mjs" ]; then
-      (cd "$BRAIN_DIR" && node scripts/verify-rag.mjs >/dev/null 2>&1) \
-        && ok "RAG smoke test passed" \
-        || warn "RAG smoke test failed — check the embedder config in $BRAIN_DIR/.env"
+      say "RAG smoke test — indexing the vault (first run also fetches the embedder; can take a while)"
+      local rag_lr rag_log rag_pid rag_done=0 rag_total=0
+      rag_lr="$BRAIN_DIR/rag/.cache/last-run.json"; rag_log="$(mktemp)"
+      ( cd "$BRAIN_DIR" && node scripts/verify-rag.mjs ) >"$rag_log" 2>&1 &
+      rag_pid=$!
+      # Live progress from the indexer's last-run.json instead of a silent /dev/null.
+      while kill -0 "$rag_pid" 2>/dev/null; do
+        if [ -f "$rag_lr" ]; then
+          rag_done=$(jq -r '.doneChunks // 0' "$rag_lr" 2>/dev/null || echo 0)
+          rag_total=$(jq -r '.totalChunks // 0' "$rag_lr" 2>/dev/null || echo 0)
+          if [ "${rag_total:-0}" -gt 0 ] 2>/dev/null; then
+            printf '\r  … embedding %s/%s chunks   ' "$rag_done" "$rag_total"
+          fi
+        fi
+        sleep 2
+      done
+      printf '\r\033[K'
+      if wait "$rag_pid"; then ok "RAG smoke test passed (${rag_total} chunks indexed)"; rm -f "$rag_log"
+      else warn "RAG smoke test failed — see $rag_log and the embedder config in $BRAIN_DIR/.env"; fi
     fi
   else
     warn "npm missing — RAG engine not installed"

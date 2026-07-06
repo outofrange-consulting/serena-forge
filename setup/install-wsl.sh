@@ -844,26 +844,39 @@ ensure_second_brain() {
     (cd "$BRAIN_DIR/rag" && npm install --no-fund --no-audit --silent) \
       && ok "RAG engine ready" || warn "npm install failed in $BRAIN_DIR/rag"
     register_vault_rag_user   # user-scope MCP (the $BRAIN_DIR/.mcp.json above stays for verify-rag)
-    if [ -f "$BRAIN_DIR/scripts/verify-rag.mjs" ]; then
-      say "RAG smoke test — indexing the vault (first run also fetches the embedder; can take a while)"
-      local rag_lr rag_log rag_pid rag_done=0 rag_total=0
-      rag_lr="$BRAIN_DIR/rag/.cache/last-run.json"; rag_log="$(mktemp)"
-      ( cd "$BRAIN_DIR" && node scripts/verify-rag.mjs ) >"$rag_log" 2>&1 &
-      rag_pid=$!
-      # Live progress from the indexer's last-run.json instead of a silent /dev/null.
-      while kill -0 "$rag_pid" 2>/dev/null; do
-        if [ -f "$rag_lr" ]; then
-          rag_done=$(jq -r '.doneChunks // 0' "$rag_lr" 2>/dev/null || echo 0)
-          rag_total=$(jq -r '.totalChunks // 0' "$rag_lr" 2>/dev/null || echo 0)
-          if [ "${rag_total:-0}" -gt 0 ] 2>/dev/null; then
-            printf '\r  … embedding %s/%s chunks   ' "$rag_done" "$rag_total"
-          fi
+    # verify-rag.mjs asserts the "Pélagie de Mollecuisse" canary, a token that
+    # exists ONLY in the shipped EXAMPLE vault. A re-hydrated real brain has had
+    # those example notes removed (clear-example-notes.mjs), so the canary can
+    # never pass there — it is an example-vault check, not a health check. Gate
+    # on the example note: run the canary only when present, else just index and
+    # confirm the engine built the store (retrieval itself is already proven).
+    local RAG_LOG RAG_TOTAL=0
+    RAG_LOG="$(mktemp)"
+    _rag_ticked() {  # _rag_ticked <workdir> <cmd...> — run bg with a live embed-progress ticker
+      local wd="$1"; shift
+      local lr="$BRAIN_DIR/rag/.cache/last-run.json" pid d=0 t=0
+      ( cd "$wd" && "$@" ) >"$RAG_LOG" 2>&1 &
+      pid=$!
+      while kill -0 "$pid" 2>/dev/null; do
+        if [ -f "$lr" ]; then
+          d=$(jq -r '.doneChunks // 0' "$lr" 2>/dev/null || echo 0)
+          t=$(jq -r '.totalChunks // 0' "$lr" 2>/dev/null || echo 0)
+          [ "${t:-0}" -gt 0 ] 2>/dev/null && printf '\r  … embedding %s/%s chunks   ' "$d" "$t"
         fi
         sleep 2
       done
-      printf '\r\033[K'
-      if wait "$rag_pid"; then ok "RAG smoke test passed (${rag_total} chunks indexed)"; rm -f "$rag_log"
-      else warn "RAG smoke test failed — see $rag_log and the embedder config in $BRAIN_DIR/.env"; fi
+      printf '\r\033[K'; RAG_TOTAL="$t"; wait "$pid"
+    }
+    if [ -f "$BRAIN_DIR/scripts/verify-rag.mjs" ] && grep -rqi 'Mollecuisse' "$BRAIN_DIR/vault" 2>/dev/null; then
+      say "RAG smoke test — example vault + canary (first run also fetches the embedder; can take a while)"
+      if _rag_ticked "$BRAIN_DIR" node scripts/verify-rag.mjs; then
+        ok "RAG smoke test passed (${RAG_TOTAL} chunks, canary found)"; rm -f "$RAG_LOG"
+      else warn "RAG smoke test failed — see $RAG_LOG and the embedder config in $BRAIN_DIR/.env"; fi
+    elif [ -d "$BRAIN_DIR/vault" ]; then
+      say "RAG index — re-hydrated brain (example canary absent by design; first run fetches the embedder)"
+      if _rag_ticked "$BRAIN_DIR/rag" npm run --silent index; then
+        ok "RAG indexed (${RAG_TOTAL} chunks; Mollecuisse canary skipped — real brain, not example vault)"; rm -f "$RAG_LOG"
+      else warn "RAG index failed — see $RAG_LOG and the embedder config in $BRAIN_DIR/.env"; fi
     fi
   else
     warn "npm missing — RAG engine not installed"

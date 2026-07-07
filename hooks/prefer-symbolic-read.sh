@@ -38,6 +38,15 @@ file_path="$(printf '%s' "$input" | jq -r '.tool_input.file_path // empty' 2>/de
 # Only .cs is in scope (case-insensitive suffix; excludes .csproj/.cshtml/.csx).
 [[ "$file_path" == *.[cC][sS] ]] || exit 0
 
+# Serena's symbolic reads only EXIST once the repo is onboarded (.serena/ folder
+# — same gate the write hook uses). With no .serena/, the nudge points at tools
+# that can't act here, so it's pure friction: e.g. dev-team recon subagents
+# (Read/Grep/Glob/Bash, no Serena MCP) whole-file reading a non-onboarded repo
+# would prompt on every large .cs. Pass through untouched.
+cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
+[[ -n "$cwd" ]] || cwd="${PWD:-.}"
+[[ -d "$cwd/.serena" ]] || exit 0
+
 # If the Read is already a bounded slice (offset/limit set), it's not a whole-file
 # dump — let it through. The concern is the reflexive full-file read.
 limit="$(printf '%s' "$input" | jq -r '.tool_input.limit // empty' 2>/dev/null || true)"

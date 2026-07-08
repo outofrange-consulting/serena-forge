@@ -10,10 +10,10 @@ Built for large, brownfield **.NET 10** codebases where "edit the right symbol" 
 
 | Capability | Mechanism |
 | --- | --- |
-| **Symbolic write/refactor** | `Edit`/`Write`/`MultiEdit` on `*.cs` are **DENIED** and redirected to Serena's symbol tools (`replace_symbol_body`, `insert_after_symbol`, `rename_symbol`, `safe_delete_symbol`, …). |
-| **Serena-first reading** | Native `Read` on `*.cs` stays **ALLOWED**, but a `SessionStart` hook pushes a navigation protocol (`get_symbols_overview` → `find_symbol` → `include_body` only on the target; `find_referencing_symbols` over grep), and a whole-file `Read` of a `.cs` file over ~100 lines gets a one-click **ASK** steering to the symbolic path. |
+| **Symbolic write/refactor** | `Edit`/`Write`/`MultiEdit` on `*.cs` are **DENIED** and redirected to Serena's symbol tools (`replace_symbol_body`, `insert_after_symbol`, `rename_symbol`, `safe_delete_symbol`, …). The same block also covers **lean-ctx's** MCP write tools (`ctx_patch`/`ctx_edit`/`ctx_fill`) so a coexisting lean-ctx cannot patch `.cs` around Serena. |
+| **Serena-first reading** | Native `Read` on `*.cs` stays **ALLOWED**; a `SessionStart` hook pushes a navigation protocol (`get_symbols_overview` → `find_symbol` → `include_body` only on the target; `find_referencing_symbols` over grep) as a preference, not a gate. |
 | **Build safety net** | After every Serena symbolic edit, the touched `.csproj` is queued and compiled once with `dotnet build` at end of turn (`Stop` hook). A failed build **blocks the turn** and hands the compiler errors back to the agent to fix. This is the real guard-rail — not a graph. |
-| **Granular destructive guard** | A `PreToolUse Bash` hook **ASKs/DENYs** on a precise set of destructive commands (see below) instead of the coarse WARN-only default. |
+| **Granular destructive guard** | A `PreToolUse` hook **ASKs/DENYs** on a precise set of destructive commands (see below) — whether run through the native `Bash` tool or a **lean-ctx** shell tool (`ctx_shell`) — instead of the coarse WARN-only default. |
 | **Onboard on demand** | serena-forge is global, so it lands in un-onboarded repos. When C# work is requested where there's no `.serena/`, the agent is steered to **propose onboarding** (`/serena-forge-setup`) to the user and run it on agreement — never to route around the block. |
 | **Bundled Serena MCP server** | The plugin ships the Serena MCP server config; enabling the plugin starts it. No separate `claude mcp add`. |
 
@@ -102,7 +102,6 @@ The `SessionStart` banner injects the Serena-first workflow every session, but a
 | Var | Default | Effect |
 | --- | --- | --- |
 | `SERENA_FORGE_BUILD` | `1` | `0` disables the end-of-turn `dotnet build` safety net. |
-| `SERENA_FORGE_READ_MAXLINES` | `100` | Line threshold above which a whole-file `.cs` `Read` prompts for confirmation; `0` disables the read nudge. |
 
 ---
 
@@ -124,8 +123,8 @@ To turn enforcement off yourself, disable the plugin (or remove the `enforce-ser
 | Hook | Event / matcher | What it does |
 | --- | --- | --- |
 | `hooks/enforce-serena-write.sh` | `PreToolUse` · `Edit\|Write\|MultiEdit` | DENY writes to `*.cs`; message redirects to Serena symbol tools (and, on an un-onboarded repo, tells the agent to propose `/serena-forge-setup`). Non-`.cs` writes pass through. |
-| `hooks/prefer-symbolic-read.sh` | `PreToolUse` · `Read` | ASK (one-click) on a whole-file `Read` of a `.cs` file over ~100 lines, steering to `get_symbols_overview` / `find_symbol`. Bounded reads (`limit` set) and small files pass through. Threshold: `SERENA_FORGE_READ_MAXLINES` (0 disables). |
-| `hooks/protect-commands.sh` | `PreToolUse` · `Bash` | ASK/DENY on the destructive command set above. |
+| `hooks/guard-leanctx-write.sh` | `PreToolUse` · `mcp__*__ctx_patch\|ctx_edit\|ctx_fill` | DENY `.cs` writes made through **lean-ctx's** MCP editors (they bypass native `Edit`/`Write`, so the block above never sees them). Non-`.cs` targets pass through, so lean-ctx keeps fast editing on other languages. Dormant when lean-ctx isn't installed. |
+| `hooks/protect-commands.sh` | `PreToolUse` · `Bash\|mcp__*__ctx_shell` | ASK/DENY on the destructive command set above, for both the native `Bash` tool and lean-ctx's shell tool. |
 | `hooks/queue-build.sh` | `PostToolUse` · Serena write tools | Cheap: resolves the nearest `.csproj` for the edited symbol and appends it to a per-repo (TMPDIR) build queue. No build here. |
 | `hooks/flush-build-queue.sh` | `Stop` | Drains the queue and runs one scoped `dotnet build --no-restore` per touched project. On failure, **blocks the stop** and feeds the compiler errors back (loop-guarded via `stop_hook_active`). Opt out with `SERENA_FORGE_BUILD=0`. |
 | `hooks/session-context.sh` | `SessionStart` · `startup\|resume\|clear\|compact` | Injects the Serena-first navigation protocol (mandatory read workflow + build-net note) and, on an un-onboarded repo, the onboard-on-demand instruction. |

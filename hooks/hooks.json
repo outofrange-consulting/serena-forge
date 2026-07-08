@@ -11,16 +11,16 @@
         ]
       },
       {
-        "matcher": "Read",
+        "matcher": "mcp__.*__ctx_patch|mcp__.*__ctx_edit|mcp__.*__ctx_fill",
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/prefer-symbolic-read.sh"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/guard-leanctx-write.sh"
           }
         ]
       },
       {
-        "matcher": "Bash",
+        "matcher": "Bash|mcp__.*__ctx_shell|mcp__.*__shell",
         "hooks": [
           {
             "type": "command",

@@ -75,10 +75,8 @@ Use only these names:
   take up to ~30s to finish initializing before symbol results are reliable. If a
   lookup returns nothing immediately after activation, retry once after it
   settles rather than concluding the symbol is absent.
-- **Reading `.cs` is still allowed — but whole-file reads are nudged.** serena-forge
-  blocks *writes* to `.cs`, not reads. However, a native whole-file `Read` of a
-  `.cs` file over ~100 lines triggers a one-click confirmation (`prefer-symbolic-read.sh`)
-  steering you to `get_symbols_overview` → `find_symbol` (`include_body: true`) on
-  just the target. A bounded `Read` (with `limit`) and files under the threshold
-  pass through silently. Reach for the symbol tools first so you pull the minimum
-  needed; the threshold is tunable via `SERENA_FORGE_READ_MAXLINES` (0 disables it).
+- **Reading `.cs` is allowed and unblocked.** serena-forge blocks *writes* to
+  `.cs`, not reads — there is no read gate. Still, reach for the symbol tools
+  first: `get_symbols_overview` → `find_symbol` (`include_body: true`) on just the
+  target pulls the minimum you need instead of a whole-file `Read`. The
+  `SessionStart` banner restates this workflow each session as a preference.

@@ -2,9 +2,11 @@
 # ============================================================================
 # serena-forge :: hooks/protect-commands.sh
 #
-# PreToolUse Bash guard. Reads the tool-call JSON on stdin, extracts
-# .tool_input.command, and returns a permission decision using the verified
-# PreToolUse stdout contract:
+# PreToolUse guard for shell commands — the native Bash tool AND lean-ctx's
+# MCP shell tools (ctx_shell / shell), which would otherwise run commands
+# outside this guard. Reads the tool-call JSON on stdin, extracts the command
+# (tool_input.command / cmd / script), and returns a permission decision using
+# the verified PreToolUse stdout contract:
 #
 #   {"hookSpecificOutput":{"hookEventName":"PreToolUse",
 #     "permissionDecision":"deny|ask","permissionDecisionReason":"..."}}
@@ -130,10 +132,18 @@ input="$(cat 2>/dev/null || true)"
 command -v jq >/dev/null 2>&1 || pass
 
 tool_name="$(printf '%s' "$input" | jq -r '.tool_name // empty' 2>/dev/null || true)"
-# Only Bash commands are in scope (hooks.json also scopes matcher=Bash).
-[[ "$tool_name" == "Bash" ]] || pass
+# In scope: the native Bash tool AND lean-ctx's shell tools (ctx_shell / shell),
+# which run commands through their own MCP path and would otherwise bypass this
+# destructive-command guard entirely. hooks.json scopes the matcher to the same
+# set; this re-check keeps the hook correct even if the matcher over-matches.
+case "$tool_name" in
+  Bash|*ctx_shell|*__shell) : ;;   # native Bash or a lean-ctx shell tool
+  *) pass ;;                        # anything else — defer
+esac
 
-cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
+# The command lives under tool_input.command for Bash; lean-ctx's shell tools
+# may instead name it cmd/script. Accept all three.
+cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // .tool_input.cmd // .tool_input.script // empty' 2>/dev/null || true)"
 [[ -n "$cmd" ]] || pass
 
 # Case-insensitive working copy (flags like -Rf, SQL keywords, etc.).

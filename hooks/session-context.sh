@@ -46,13 +46,15 @@ fi
 
 # --- The injected banner -----------------------------------------------------
 # Tight: read policy, write policy, onboarding status. No bypass instructions.
-context="Serena-first protocol (serena-forge active).
+context="Serena-first protocol for C# (serena-forge active).
 
 Serena provides symbol-level read and edit tools for the CURRENT repository, backed by the Roslyn language server.
 
-Read policy: native Read of .cs files is allowed, but PREFER Serena for navigation. Mandatory workflow for reading C#: (1) get_symbols_overview to map a file, (2) find_symbol on the target, (3) include_body: true ONLY on the specific symbol you need. Use find_referencing_symbols (real call sites via the LSP) instead of grep for any change-impact analysis. Do not reflexively Read whole .cs files — a whole-file Read over ~100 lines will prompt for confirmation.
+Read policy: PREFER Serena for C# navigation — get_symbols_overview to map a file, find_symbol (include_body: true) on just the target symbol, and find_referencing_symbols (real LSP call sites) instead of grep for change-impact analysis. This is guidance, not a gate: reads are not blocked.
 
-Write policy: editing .cs via Edit/Write/MultiEdit is BLOCKED globally by serena-forge. Change C# through Serena's symbolic edits: replace_symbol_body, insert_after_symbol, insert_before_symbol (and rename_symbol / safe_delete_symbol for structural changes). If Serena cannot make an edit, stop and ask the user to fix Serena or disable the hook — do not work around the block.
+Write policy: editing .cs is BLOCKED globally by serena-forge — this applies to the native Edit/Write/MultiEdit tools AND to any lean-ctx write tool (ctx_patch/ctx_edit/ctx_fill). Change C# through Serena's symbolic edits: replace_symbol_body, insert_after_symbol, insert_before_symbol (rename_symbol / safe_delete_symbol for structural changes), create_text_file for new files. lean-ctx's editors remain available for non-.cs files. If Serena cannot make an edit, stop and ask the user to fix Serena or disable the hook — do not work around the block.
+
+Shell policy: destructive commands (rm -rf on / ~ or a path, git push --force, git reset --hard, git clean -f, dotnet ef database drop, unqualified SQL DROP/TRUNCATE/DELETE/UPDATE) are guarded whether you run them through the native Bash tool or a lean-ctx shell tool.
 
 Build safety net: after your C# edits, serena-forge compiles the touched project(s) with dotnet build at end of turn. If it fails, you will be handed the compiler errors and asked to fix them before finishing — treat a red build as unfinished work.
 

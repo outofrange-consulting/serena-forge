@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # serena-forge — WSL workstation bootstrap, lean-ctx edition.
 #
-# This is the successor to the ctx-wire/caveman/ponytail bootstrap: it swaps the
-# whole context-compression layer for a single Rust binary (lean-ctx) and, on an
-# existing box, MIGRATES the old stack away (uninstalls the obsolete plugins,
-# removes ctx-wire's shims/filters). Everything else — Serena (via serena-forge),
-# CodeGraph, dev-team, second-brain, the domain CLIs — is preserved.
+# Swaps the ctx-wire + caveman + ponytail compression stack for a single Rust
+# binary (lean-ctx) and, on an existing box, MIGRATES the old stack away —
+# including CodeGraph, which is retired: lean-ctx's multi-repo search covers the
+# cross-repo "find/read" case, and Serena owns C# symbol intelligence. Everything
+# else (Serena via serena-forge, dev-team, second-brain, domain CLIs) is kept.
 #
-# Idempotent: safe to re-run. Tools are refreshed to latest by default; config
-# and secrets are preserved; the migration step converges an old box onto the new
+# Idempotent: safe to re-run. Tools refresh to latest by default; config and
+# secrets are preserved; the migration step converges an old box onto the new
 # stack without re-asking anything.
 #
 #   Runtimes & deps : apt basics (git, curl, jq, unzip, build tools), Node LTS,
@@ -18,38 +18,32 @@
 #   Plugins         : serena-forge (this repo — Serena force + destructive guard
 #                     + lean-ctx guard hooks), dev-team@bfinster (upstream
 #                     bdfinst/agentic-dev-team)
-#                     REMOVED vs the old stack: caveman, ponytail (superseded by
-#                     lean-ctx's native compression + tool profiles)
+#                     REMOVED vs the old stack: caveman, ponytail, ctx-wire,
+#                     CodeGraph (superseded by lean-ctx)
 #   Context layer   : lean-ctx (leanctx.com) — hybrid mode (MCP tools + shell
-#                     output compression). Replaces ctx-wire + caveman + ponytail.
+#                     output compression), tool profile + per-repo index built on
+#                     install. Replaces ctx-wire + caveman + ponytail + CodeGraph.
 #   Skills (~/.claude/skills) : atlassian (acli), context7 (from
 #                     outofrange-consulting/omp-dev-team) + azure-devops,
 #                     aspire-cli, datadog
 #   CLI tools       : acli (Atlassian), az + azure-devops extension, ctx7 (docs),
 #                     aspire (.NET Aspire CLI), pup (Datadog CLI, EU), aoe (tmux
 #                     multi-agent), Docker Engine (native WSL)
-#   dev-team tooling: CodeGraph, ast-grep, semgrep, Stryker.NET (global)
-#   Repo indexing   : ONE CodeGraph graph at a code root (cross-repo, user-scope
-#                     MCP) and `serena project index` per C# repo. lean-ctx roots
-#                     are registered too (cross-repo SEARCH; the graph stays
-#                     CodeGraph's job — lean-ctx's graph is per-repo only)
+#   dev-team tooling: ast-grep, semgrep, Stryker.NET (global)
+#   Repo indexing   : Serena `project index` per C# repo, and each repo registered
+#                     + indexed as a lean-ctx root (cross-repo SEARCH replaces
+#                     CodeGraph's cross-repo graph — note lean-ctx has no
+#                     cross-repo GRAPH/impact, see setup/LEAN-CTX-MIGRATION.md)
 #   MCP             : Miro remote MCP (OAuth via /mcp in-session)
 #   Second brain    : clones outofrange-consulting/second-brain, renders configs,
 #                     installs the RAG engine (business-knowledge vault — distinct
 #                     from lean-ctx's per-repo code memory; both are kept)
 #
-# .NET output & localization (the ctx-wire FR/EN filters replacement):
-#   lean-ctx's built-in dotnet/msbuild compressor is English-only and silently
-#   no-ops on French-localized output (Génération réussie / Avertissement /
-#   Erreur). Two supported paths — pick with --dotnet-lang:
-#     en (default): export DOTNET_CLI_UI_LANGUAGE=en (+ VSLANG=1033) so the SDK
-#                   emits English; lean-ctx's built-in compression then works, and
-#                   serena-forge's dotnet-build safety-net grep is hardened too.
-#                   ctx-wire is fully removed.
-#     fr          : keep French dotnet output. ctx-wire is KEPT for its FR/EN
-#                   dotnet+git filters (exit-code-aware, which lean-ctx's custom
-#                   [[rules]] are not), and lean-ctx is installed in MCP-only mode
-#                   so the two compression layers don't double-process the shell.
+# .NET output is FORCED to English (DOTNET_CLI_UI_LANGUAGE=en + VSLANG=1033 in
+# env.sh) so lean-ctx's English-only dotnet/msbuild compressor fires regardless of
+# host locale, AND serena-forge's dotnet-build safety-net grep is hardened. This
+# is why ctx-wire (whose only remaining edge was French dotnet filters) is dropped
+# entirely.
 #
 # Secrets: any missing value is prompted as a SECURE string (read -s, never
 # echoed) and persisted to ~/.config/claude-tools/secrets.env (chmod 600).
@@ -60,10 +54,6 @@
 # Flags:
 #   -y, --yes            non-interactive: never prompt (missing secrets skipped)
 #   --no-update          keep already-installed tools (don't refresh)
-#   --dotnet-lang=en|fr  .NET output language / compression path (default en; see above)
-#   --codegraph=keep|drop  keep the cross-repo CodeGraph graph (default keep).
-#                        drop = rely on lean-ctx multi-repo SEARCH only (note:
-#                        lean-ctx has no cross-repo GRAPH/impact — see docs)
 #   --leanctx-edit=guard|off  how to keep .cs edits on Serena (default guard).
 #                        guard = serena-forge hooks deny ctx_patch/ctx_edit on .cs
 #                        (lean-ctx still edits other languages). off = disable
@@ -79,13 +69,11 @@
 set -euo pipefail
 
 YES=0; NO_UPDATE=0; SKIP_BRAIN=0; SKIP_AZ=0; SKIP_ACLI=0; SKIP_MIRO=0; SKIP_DOTNET=0; SKIP_INDEX=0; SKIP_LEANCTX=0
-DOTNET_LANG=en; CODEGRAPH=keep; LEANCTX_EDIT=guard; LEANCTX_PROFILE=standard; LEANCTX_KB_REPO=""
+LEANCTX_EDIT=guard; LEANCTX_PROFILE=standard; LEANCTX_KB_REPO=""
 BRAIN_DIR="${SECOND_BRAIN_DIR:-$HOME/second-brain}"
 for a in "$@"; do case "$a" in
   -y|--yes) YES=1 ;;
   --no-update) NO_UPDATE=1 ;;
-  --dotnet-lang=*) DOTNET_LANG="${a#*=}" ;;
-  --codegraph=*) CODEGRAPH="${a#*=}" ;;
   --leanctx-edit=*) LEANCTX_EDIT="${a#*=}" ;;
   --leanctx-profile=*) LEANCTX_PROFILE="${a#*=}" ;;
   --leanctx-kb-repo=*) LEANCTX_KB_REPO="${a#*=}" ;;
@@ -94,12 +82,10 @@ for a in "$@"; do case "$a" in
   --skip-brain) SKIP_BRAIN=1 ;; --skip-az) SKIP_AZ=1 ;; --skip-acli) SKIP_ACLI=1 ;;
   --skip-miro) SKIP_MIRO=1 ;; --skip-dotnet) SKIP_DOTNET=1 ;; --skip-index) SKIP_INDEX=1 ;;
   --skip-leanctx) SKIP_LEANCTX=1 ;;
-  -h|--help) sed -n '2,78p' "$0"; exit 0 ;;
+  -h|--help) sed -n '2,68p' "$0"; exit 0 ;;
   *) echo "unknown arg: $a" >&2; exit 2 ;;
 esac; done
 
-case "$DOTNET_LANG"    in en|fr) ;; *) echo "--dotnet-lang must be en|fr" >&2; exit 2 ;; esac
-case "$CODEGRAPH"      in keep|drop) ;; *) echo "--codegraph must be keep|drop" >&2; exit 2 ;; esac
 case "$LEANCTX_EDIT"   in guard|off) ;; *) echo "--leanctx-edit must be guard|off" >&2; exit 2 ;; esac
 case "$LEANCTX_PROFILE" in minimal|standard|power) ;; *) echo "--leanctx-profile must be minimal|standard|power" >&2; exit 2 ;; esac
 
@@ -124,12 +110,6 @@ MARK_BEGIN="# >>> claude-tools env (serena-forge setup) >>>"
 MARK_END="# <<< claude-tools env (serena-forge setup) <<<"
 
 write_env_file() {
-  # DOTNET_CLI_UI_LANGUAGE is emitted only on the English path, so on the French
-  # path the SDK keeps its localized output for ctx-wire's FR filters to compact.
-  local dotnet_lang_block=""
-  if [ "$DOTNET_LANG" = "en" ]; then
-    dotnet_lang_block=$'# Force English .NET CLI/MSBuild output so lean-ctx\047s (English-only)\n# dotnet compression fires regardless of host locale, and so serena-forge\047s\n# dotnet-build safety-net grep matches. Switch off with --dotnet-lang=fr.\nexport DOTNET_CLI_UI_LANGUAGE=en\nexport VSLANG=1033'
-  fi
   cat > "$ENV_FILE" <<EOF
 # Managed by serena-forge setup/install-wsl.sh — regenerated on every run.
 # Sourced from ~/.profile, ~/.bashrc (top) and ~/.zshenv so PATH is correct
@@ -144,7 +124,11 @@ unset _d
 export PATH
 if [ -d "\$HOME/.dotnet" ]; then export DOTNET_ROOT="\$HOME/.dotnet"; fi
 export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
-${dotnet_lang_block}
+# Force English .NET CLI/MSBuild output so lean-ctx's (English-only) dotnet
+# compression fires regardless of host locale, and so serena-forge's
+# dotnet-build safety-net grep matches.
+export DOTNET_CLI_UI_LANGUAGE=en
+export VSLANG=1033
 # Datadog (pup CLI + dd tracers): default org is the EU site.
 export DD_SITE=datadoghq.eu
 if [ -f "\$HOME/.config/claude-tools/secrets.env" ]; then
@@ -176,7 +160,7 @@ setup_env_wiring() {
   wire_rc "$HOME/.zshenv"  bottom
   # shellcheck disable=SC1090
   . "$ENV_FILE" || true
-  ok "env.sh wired (dotnet-lang=$DOTNET_LANG)"
+  ok "env.sh wired (English .NET output forced)"
 }
 
 # ---------------------------------------------------------------------------
@@ -407,9 +391,9 @@ clone_or_update() {
 }
 
 # ---------------------------------------------------------------------------
-# MIGRATION — converge an OLD box (ctx-wire + caveman + ponytail) onto the new
-# lean-ctx stack. Idempotent: a no-op on a clean box. Runs before install so the
-# new tools land on a cleaned foundation.
+# MIGRATION — converge an OLD box (ctx-wire + caveman + ponytail + CodeGraph)
+# onto the new lean-ctx stack. Idempotent: a no-op on a clean box. Runs before
+# install so the new tools land on a cleaned foundation.
 # ---------------------------------------------------------------------------
 uninstall_plugin() {  # uninstall_plugin <plugin> <marketplace>
   local plugin="$1" market="$2"
@@ -425,17 +409,15 @@ uninstall_plugin() {  # uninstall_plugin <plugin> <marketplace>
   fi
 }
 
-remove_ctx_wire() {  # full removal of the ctx-wire compression layer (English path)
+remove_ctx_wire() {
   if have ctx-wire; then
-    say "Migration: removing ctx-wire (replaced by lean-ctx)"
+    say "Migration: removing ctx-wire (replaced by lean-ctx + forced-English dotnet)"
     ctx-wire shims uninstall >/dev/null 2>&1 || true
     local b; b="$(command -v ctx-wire || true)"
     [ -n "$b" ] && rm -f "$b" 2>/dev/null || true
     rm -rf "$HOME/.config/ctx-wire" 2>/dev/null || true
     ok "ctx-wire removed"
   fi
-  # In case shims were installed but the binary is already gone, sweep the
-  # serena-forge-managed shim wrappers by their managed marker.
   local d="$HOME/.local/bin" f
   if [ -d "$d" ]; then
     for f in "$d"/*; do
@@ -445,19 +427,33 @@ remove_ctx_wire() {  # full removal of the ctx-wire compression layer (English p
   fi
 }
 
+remove_codegraph() {
+  # Retire CodeGraph: unregister the user-scope MCP server, drop its cd-wrapper,
+  # and strip the managed routing block from ~/.claude/CLAUDE.md. The binary and
+  # any per-repo .codegraph/ indexes are left on disk (harmless, user-owned) — we
+  # only unwire it from Claude Code so it stops loading.
+  local changed=0
+  if have claude && claude mcp get codegraph >/dev/null 2>&1; then
+    say "Migration: unregistering the CodeGraph MCP server (retired)"
+    claude mcp remove -s user codegraph >/dev/null 2>&1 || claude mcp remove codegraph >/dev/null 2>&1 || true
+    changed=1
+  fi
+  [ -f "$HOME/.local/bin/codegraph-root" ] && { rm -f "$HOME/.local/bin/codegraph-root"; changed=1; }
+  local md="$HOME/.claude/CLAUDE.md" b="<!-- >>> serena-forge setup: codegraph root >>> -->" e="<!-- <<< serena-forge setup: codegraph root <<< -->" tmp
+  if [ -f "$md" ] && grep -qF "$b" "$md" 2>/dev/null; then
+    tmp="$(mktemp)"
+    awk -v b="$b" -v e="$e" '$0==b{skip=1} !skip{print} $0==e{skip=0}' "$md" > "$tmp" && mv "$tmp" "$md"
+    changed=1
+  fi
+  [ "$changed" = 1 ] && ok "CodeGraph unwired from Claude Code (lean-ctx multi-repo takes over cross-repo search)"
+}
+
 migrate_obsolete() {
   bold "Migration: obsolete stack -> lean-ctx"
   uninstall_plugin caveman  caveman
   uninstall_plugin ponytail ponytail
-  # ctx-wire: removed on the English path; kept on the French path (it owns the
-  # FR/EN dotnet+git shell filters there).
-  if [ "$DOTNET_LANG" = "en" ]; then
-    remove_ctx_wire
-  else
-    have ctx-wire && ok "ctx-wire kept (dotnet-lang=fr — owns FR/EN dotnet+git filters)" \
-                  || warn "dotnet-lang=fr but ctx-wire is not installed — French dotnet output will not be compressed"
-  fi
-  # Stale mirrored skills that used to shadow the now-removed plugins.
+  remove_ctx_wire
+  remove_codegraph
   local s
   for s in caveman yagni; do
     [ -d "$HOME/.claude/skills/$s" ] && { rm -rf "$HOME/.claude/skills/$s"; ok "removed stale mirrored skill $s"; }
@@ -465,8 +461,8 @@ migrate_obsolete() {
 }
 
 # ---------------------------------------------------------------------------
-# Plugins & marketplaces (serena-forge + upstream agentic-dev-team). caveman and
-# ponytail are intentionally NOT installed — see migrate_obsolete.
+# Plugins & marketplaces (serena-forge + upstream agentic-dev-team). caveman,
+# ponytail and CodeGraph are intentionally NOT installed — see migrate_obsolete.
 # ---------------------------------------------------------------------------
 ensure_plugin() {
   local repo="$1" market="$2" plugin="$3"
@@ -513,11 +509,10 @@ ensure_skills() {
 }
 
 # ---------------------------------------------------------------------------
-# lean-ctx — the context layer (replaces ctx-wire + caveman + ponytail)
+# lean-ctx — the context layer (replaces ctx-wire + caveman + ponytail + CodeGraph)
 # ---------------------------------------------------------------------------
 ensure_lean_ctx() {
   [ "$SKIP_LEANCTX" = 1 ] && return 0
-  # Install / update the binary (try the universal installer, then npm, then cargo).
   if have lean-ctx && [ "$NO_UPDATE" = 1 ]; then
     ok "lean-ctx $(lean-ctx --version 2>/dev/null | head -1)"
   else
@@ -539,24 +534,21 @@ ensure_lean_ctx() {
                   || { warn "lean-ctx install failed — https://leanctx.com"; return 0; }
   fi
 
-  # Integration mode: hybrid on the English path (MCP + shell compression);
-  # MCP-only on the French path (ctx-wire owns the shell-output plane there, so
-  # lean-ctx must NOT also compress the shell or the two would double-process).
-  local mode="hybrid"; [ "$DOTNET_LANG" = "fr" ] && mode="mcp"
-  say "Wiring lean-ctx into Claude Code (mode=$mode)"
-  lean-ctx init --agent claude --mode "$mode" >/dev/null 2>&1 \
+  # Hybrid mode: MCP tools + shell-output compression (Claude Code has shell access).
+  say "Wiring lean-ctx into Claude Code (hybrid mode)"
+  lean-ctx init --agent claude --mode hybrid >/dev/null 2>&1 \
     || lean-ctx init --agent claude >/dev/null 2>&1 \
     || warn "lean-ctx init failed — run: lean-ctx init --agent claude"
 
-  # Tool profile (minimal|standard|power). standard (16 tools) is the sane default
-  # for Claude Code's hybrid mode — power is reachable at runtime via ctx_load_tools.
+  # Tool profile (minimal|standard|power). standard (16 tools) is the sane default;
+  # power (68+) is reachable at runtime via ctx_load_tools.
   lean-ctx tools "$LEANCTX_PROFILE" >/dev/null 2>&1 || true
   ok "lean-ctx tool profile: $LEANCTX_PROFILE"
 
-  # Config: keep the read-before-write gate intact (auto) and, on --leanctx-edit=off,
-  # disable lean-ctx's own edit tools so ALL editing goes native + Serena. On
-  # 'guard' (default) the edit tools stay enabled and serena-forge's
-  # guard-leanctx-write hook denies only the .cs ones.
+  # Config: keep Claude Code's native read-before-write gate (auto), don't compress
+  # the human's interactive shell, and on --leanctx-edit=off disable lean-ctx's own
+  # edit tools so ALL editing goes native + Serena. On 'guard' (default) the edit
+  # tools stay enabled and serena-forge's guard-leanctx-write hook denies only .cs.
   local cfg="$HOME/.config/lean-ctx/config.toml"
   mkdir -p "$(dirname "$cfg")"; touch "$cfg"
   local b="# >>> serena-forge managed >>>" e="# <<< serena-forge managed <<<"
@@ -584,8 +576,7 @@ ensure_lean_ctx() {
 }
 
 # Optional: sync lean-ctx's learned knowledge into a git repo as OKF Markdown, so
-# it survives a reinstall and can be shared/reviewed by the team. Installs a small
-# wrapper; does not run it automatically.
+# it survives a reinstall and can be shared/reviewed by the team.
 install_leanctx_kb_sync() {
   [ -n "$LEANCTX_KB_REPO" ] || return 0
   have lean-ctx || return 0
@@ -612,41 +603,6 @@ fi
 EOF
   chmod +x "$wrapper"
   ok "leanctx-kb-sync installed — run it to snapshot knowledge into $repo"
-}
-
-# ---------------------------------------------------------------------------
-# ctx-wire — installed ONLY on the French path (--dotnet-lang=fr), where it owns
-# the shell-output plane with its exit-code-aware FR/EN dotnet+git filters. On
-# the English path this is never called (migrate_obsolete removes ctx-wire).
-# ---------------------------------------------------------------------------
-ensure_ctx_wire_fr() {
-  [ "$DOTNET_LANG" = "fr" ] || return 0
-  if have ctx-wire; then
-    [ "$NO_UPDATE" = 1 ] || { say "Updating ctx-wire (French dotnet/git filters)"; ctx-wire update >/dev/null 2>&1 || true; }
-  else
-    say "Installing ctx-wire (French dotnet/git filters — dotnet-lang=fr)"
-    curl -fsSL https://ctx-wire.dev/install.sh | sh || { warn "ctx-wire install failed"; return 0; }
-    hash -r 2>/dev/null || true
-  fi
-  have ctx-wire || { warn "ctx-wire not on PATH"; return 0; }
-  ctx-wire shims install >/dev/null 2>&1 || warn "ctx-wire shims install failed"
-  # Merge the token-diet FR/EN git/dotnet filters as a managed block.
-  local fdir="$SRC_DIR/omp-dev-team/plugins/token-diet/ctx-wire/filters.d"
-  local ftoml="$HOME/.config/ctx-wire/filters.toml" tmp
-  if [ -d "$fdir" ]; then
-    mkdir -p "$(dirname "$ftoml")"; touch "$ftoml"
-    tmp="$(mktemp)"
-    sed '/^# >>> serena-forge filters >>>$/,/^# <<< serena-forge filters <<<$/d' "$ftoml" > "$tmp"
-    {
-      cat "$tmp"
-      echo "# >>> serena-forge filters >>>"
-      cat "$fdir"/*.toml 2>/dev/null || true
-      echo "# <<< serena-forge filters <<<"
-    } > "$ftoml"
-    rm -f "$tmp"
-    ctx-wire verify >/dev/null 2>&1 || warn "ctx-wire verify reported issues — check $ftoml"
-  fi
-  ok "ctx-wire $(ctx-wire --version 2>/dev/null | head -1) (FR/EN dotnet+git filters merged)"
 }
 
 # ---------------------------------------------------------------------------
@@ -760,22 +716,8 @@ ensure_az_devops() {
 }
 
 # ---------------------------------------------------------------------------
-# dev-team tooling: CodeGraph, ast-grep, semgrep
+# dev-team tooling: ast-grep, semgrep (CodeGraph is retired)
 # ---------------------------------------------------------------------------
-ensure_codegraph() {
-  [ "$CODEGRAPH" = "drop" ] && { say "CodeGraph: skipped (--codegraph=drop)"; return 0; }
-  if have codegraph; then
-    [ "$NO_UPDATE" = 1 ] || { say "Updating CodeGraph"; codegraph upgrade >/dev/null 2>&1 || true; }
-  else
-    say "Installing CodeGraph"
-    if have npm; then npm install -g @colbymchenry/codegraph >/dev/null 2>&1 || true; fi
-    have codegraph || curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | sh || true
-    hash -r 2>/dev/null || true
-  fi
-  have codegraph && ok "codegraph $(codegraph --version 2>/dev/null | head -1)" \
-    || warn "codegraph install failed — https://github.com/colbymchenry/codegraph"
-}
-
 ensure_ast_grep() {
   have npm || { warn "npm missing — skipping ast-grep"; return 0; }
   if have ast-grep && [ "$NO_UPDATE" = 1 ]; then ok "ast-grep $(ast-grep --version 2>/dev/null)"; return; fi
@@ -796,50 +738,10 @@ ensure_semgrep() {
 }
 
 # ---------------------------------------------------------------------------
-# Repo indexing — CodeGraph at the CODE ROOT (one cross-repo graph, kept because
-# lean-ctx's graph is per-repo only), Serena per C# repo, and lean-ctx roots
-# registered for cross-repo SEARCH.
+# Repo indexing — Serena `project index` per C# repo, and each repo registered +
+# indexed as a lean-ctx root (cross-repo SEARCH; lean-ctx replaces CodeGraph's
+# cross-repo find/read, though not a cross-repo graph — see the migration doc).
 # ---------------------------------------------------------------------------
-register_codegraph_root() {
-  local root="$1" wrapper="$HOME/.local/bin/codegraph-root"
-  cat > "$wrapper" <<EOF
-#!/bin/sh
-# Managed by serena-forge setup/install-wsl.sh — regenerated on every run.
-# Serves the CODE_ROOT-level CodeGraph index to every Claude Code session.
-cd "$root" || exit 1
-exec codegraph serve --mcp
-EOF
-  chmod +x "$wrapper"
-  if have claude && ! claude mcp get codegraph >/dev/null 2>&1; then
-    claude mcp add -s user codegraph -- "$wrapper" >/dev/null 2>&1 \
-      && ok "codegraph MCP registered (user scope, root graph)" \
-      || warn "codegraph MCP registration failed — run: claude mcp add -s user codegraph -- $wrapper"
-  fi
-}
-
-write_codegraph_claude_md() {
-  local root="$1" md="$HOME/.claude/CLAUDE.md" tmp
-  local b="<!-- >>> serena-forge setup: codegraph root >>> -->" e="<!-- <<< serena-forge setup: codegraph root <<< -->"
-  mkdir -p "$(dirname "$md")"; touch "$md"
-  tmp="$(mktemp)"
-  awk -v b="$b" -v e="$e" '$0==b{skip=1} !skip{print} $0==e{skip=0}' "$md" > "$tmp"
-  {
-    cat "$tmp"
-    printf '\n%s\n' "$b"
-    cat <<EOF
-## CodeGraph (root graph)
-A user-scope \`codegraph\` MCP server indexes ALL repos under \`$root\`
-(one cross-repo graph). Prefer \`mcp__codegraph__*\` tools (context/explore)
-for multi-file or cross-repo exploration. lean-ctx's ctx_graph is per-repo only,
-so cross-repo dependency/impact stays CodeGraph's job. For C# symbol work in the
-current repo, Serena remains the source of truth (serena-forge).
-EOF
-    printf '%s\n' "$e"
-  } > "$md"
-  rm -f "$tmp"
-  ok "root-graph routing note written to ~/.claude/CLAUDE.md (managed block)"
-}
-
 run_ticking() {
   local label="$1" wd="$2"; shift 2
   local pid s=0 rc=0
@@ -854,33 +756,38 @@ run_ticking() {
   return "$rc"
 }
 
+# Build/refresh lean-ctx's index for a repo so the first cross-repo search/read
+# isn't a cold start. `index build` and `graph build` are incremental (unchanged
+# files reused via content hash), so this is cheap to re-run on every install.
+leanctx_index_repo() {  # leanctx_index_repo <repo>
+  local repo="$1"
+  have lean-ctx || return 0
+  [ "$SKIP_LEANCTX" = 1 ] && return 0
+  # Register the repo as a persistent multi-repo root (idempotent). CLI surface
+  # has shifted across versions, so try the known forms and fall back quietly.
+  lean-ctx multi-repo add-root "$repo" "$(basename "$repo")" >/dev/null 2>&1 \
+    || lean-ctx serve --add-root "$repo" >/dev/null 2>&1 || true
+  ( cd "$repo" && {
+      lean-ctx index build >/dev/null 2>&1 || lean-ctx index build-full >/dev/null 2>&1 || true
+      lean-ctx graph build >/dev/null 2>&1 || true
+    } )
+}
+
 index_repos() {
   [ "$SKIP_INDEX" = 1 ] && return 0
-  say "Repo indexing (CodeGraph at the root + Serena per repo + lean-ctx roots)"
+  say "Repo indexing (Serena per C# repo + lean-ctx roots)"
   if ! require_var CODE_ROOT "Root folder containing your git repos (e.g. ~/code — Enter to skip indexing)" plain; then
     return 0
   fi
   local root="${CODE_ROOT/#\~/$HOME}"
   [ -d "$root" ] || { warn "CODE_ROOT does not exist: $root — skipping indexing"; return 0; }
 
-  if [ "$CODEGRAPH" = "keep" ] && have codegraph; then
-    if [ -d "$root/.codegraph" ]; then
-      say "CodeGraph: syncing the root graph ($root)"
-      run_ticking "codegraph sync" "$root" codegraph sync && ok "codegraph sync" || warn "codegraph sync failed"
-    else
-      say "CodeGraph: building the root graph ($root — first run can take a while)"
-      run_ticking "codegraph init (first build)" "$root" codegraph init -i && ok "codegraph init" || warn "codegraph init failed"
-    fi
-    [ -d "$root/.codegraph" ] && { register_codegraph_root "$root"; write_codegraph_claude_md "$root"; }
-  fi
-
   local gitdir repo count=0
   while IFS= read -r gitdir; do
     repo="$(dirname "$gitdir")"; count=$((count + 1))
-    # Register each repo as a lean-ctx root for cross-repo SEARCH (idempotent).
     if have lean-ctx && [ "$SKIP_LEANCTX" = 0 ]; then
-      lean-ctx multi-repo add-root "$repo" "$(basename "$repo")" >/dev/null 2>&1 \
-        || lean-ctx serve --add-root "$repo" >/dev/null 2>&1 || true
+      run_ticking "lean-ctx index $(basename "$repo")" "$repo" leanctx_index_repo "$repo" \
+        && ok "  lean-ctx indexed $(basename "$repo")" || true
     fi
     if have uvx && [ -n "$(find "$repo" -maxdepth 3 \( -name '*.sln' -o -name '*.csproj' \) -not -path '*/bin/*' -not -path '*/obj/*' -print -quit 2>/dev/null)" ]; then
       say "Serena: indexing $repo (Roslyn — can take a while on first run)"
@@ -1062,19 +969,15 @@ doctor() {
   check ctx7     optional
   check docker   optional "docker --version"
   check aoe      optional "aoe --version"
-  [ "$CODEGRAPH" = "keep" ] && check codegraph optional "codegraph --version"
   check ast-grep optional "ast-grep --version"
   check semgrep  optional "semgrep --version"
   check acli     optional "acli --version"
   check az       optional
   check aspire   optional "aspire --version"
   check pup      optional "pup --version"
-  # ctx-wire should be GONE on the English path, PRESENT on the French path.
-  if [ "$DOTNET_LANG" = "en" ]; then
-    have ctx-wire && { warn "ctx-wire is still installed but dotnet-lang=en — it should have been removed; run remove manually"; }
-  else
-    have ctx-wire || warn "dotnet-lang=fr but ctx-wire is missing — French dotnet output won't be compressed"
-  fi
+  # Retired tools should be GONE after migration.
+  have ctx-wire  && warn "ctx-wire is still installed — it should have been removed; run: ctx-wire shims uninstall && rm \$(command -v ctx-wire)"
+  have claude && claude mcp get codegraph >/dev/null 2>&1 && warn "codegraph MCP still registered — run: claude mcp remove -s user codegraph"
   for t in claude node; do
     have "$t" && ! bash -lc "command -v $t" >/dev/null 2>&1 \
       && warn "$t is not visible from a fresh login shell — check ~/.profile"
@@ -1085,7 +988,7 @@ doctor() {
 # ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
-bold "serena-forge WSL setup — lean-ctx edition (dotnet-lang=$DOTNET_LANG, codegraph=$CODEGRAPH, leanctx-edit=$LEANCTX_EDIT)"
+bold "serena-forge WSL setup — lean-ctx edition (leanctx-edit=$LEANCTX_EDIT, profile=$LEANCTX_PROFILE)"
 grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null || [ -n "${WSL_DISTRO_NAME:-}" ] \
   || warn "WSL not detected — continuing anyway (plain Linux is fine)"
 
@@ -1103,12 +1006,10 @@ migrate_obsolete
 ensure_plugins
 ensure_skills
 ensure_lean_ctx
-ensure_ctx_wire_fr
 install_leanctx_kb_sync
 ensure_ctx7
 ensure_docker
 ensure_aoe
-ensure_codegraph
 ensure_ast_grep
 ensure_semgrep
 ensure_dotnet_tools

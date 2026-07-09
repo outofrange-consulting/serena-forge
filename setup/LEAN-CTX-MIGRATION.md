@@ -20,11 +20,12 @@ the new guard hooks. Re-running the script converges any box onto the new stack.
 
 | Component | Verdict | Why |
 | --- | --- | --- |
-| **ctx-wire** | ✅ Replaced (see the .NET caveat) | lean-ctx's 56 shell-compression modules + 10 read modes are a superset of ctx-wire's shell filtering — **except** localized .NET output (below). |
-| **caveman** | ✅ Replaced | Compression is native in lean-ctx (content-addressed cache, ~13-token cached re-reads, pressure auto-downgrade). |
-| **ponytail** | ✅ Replaced | Tool profiles (minimal/standard/power) + pressure-based degradation cover the "don't over-fetch" role. |
+| **ctx-wire** | ✅ Removed | lean-ctx's shell-compression modules + 10 read modes supersede it. Its only remaining edge was French .NET filters — neutralized by forcing English .NET output (below). |
+| **caveman** | ✅ Removed | Compression is native in lean-ctx (content-addressed cache, ~13-token cached re-reads, pressure auto-downgrade). |
+| **ponytail** | ✅ Removed | Tool profiles (minimal/standard/power) + pressure-based degradation cover the "don't over-fetch" role. |
+| **CodeGraph** | ✅ Removed | Retired in favor of lean-ctx multi-repo **search** (each repo registered + indexed as a root on install). Trade-off accepted: lean-ctx has no cross-repo **graph**/impact — that use case moves to per-repo Serena + lean-ctx search. Migration unwires the CodeGraph MCP server, its cd-wrapper, and its `CLAUDE.md` block. |
+| **RTK** | ✅ Skipped | Redundant with lean-ctx — same job (compress/dedup/truncate/filter shell output), different layer. tokbench shows no stacking benefit and added latency. See "RTK" below. |
 | **Serena** | ❌ Kept | lean-ctx is tree-sitter (syntactic); Serena is **Roslyn** (the real C# compiler). No contest for C# symbol edits/refactors/diagnostics. lean-ctx has zero .NET/Roslyn awareness. |
-| **CodeGraph** | ⚠️ Kept by default | lean-ctx's graph is **per-repo only** — no cross-repo edges, impact, or auto-discovery under a root. Its multi-repo feature is query-time **search federation**, not one graph. CodeGraph's root-level cross-repo graph has no lean-ctx equivalent. |
 | **second-brain** | ❌ Kept | Different scope — business knowledge, not code memory (see below). |
 | **dev-team / semgrep / ast-grep** | ❌ Kept | Workflow + security tooling; ast-grep is a dev-team dependency. |
 
@@ -46,34 +47,48 @@ serena-forge v0.3.0 closes this:
 All new guards were unit-tested (`.cs` denied through lean-ctx; non-`.cs` allowed;
 `ctx_shell rm -rf /` denied; `ctx_shell git push --force` asks; benign passes).
 
-## Decision points (flags)
-
-### `--dotnet-lang=en` (default) vs `fr` — the localization gap
+## .NET output is forced to English (no flag — always on)
 
 lean-ctx has a dedicated dotnet/msbuild compressor, but it matches **English
 literals only** ("Build succeeded", "Error(s)", …). Under a French UI culture the
 SDK prints "La génération a réussi / Avertissement(s) / Erreur(s)", which lean-ctx
-**silently passes through uncompressed**. Your ctx-wire `filters.d/` had dedicated
-FR filters exactly for this — and they are **exit-code-aware** (a clean-looking
-summary is *not* collapsed to "ok" when the build actually failed), which lean-ctx's
-custom `[[rules]]` schema cannot express.
+**silently passes through uncompressed**. That was ctx-wire's last remaining edge —
+its `filters.d/` had exit-code-aware FR filters for exactly this.
 
-- **`en` (default, recommended):** the script exports `DOTNET_CLI_UI_LANGUAGE=en`
-  (+ `VSLANG=1033`) in `env.sh`, so the SDK emits English. lean-ctx's built-in
-  (error-preserving, well-tested) compressor then works, and serena-forge's own
-  `dotnet build` safety-net grep is hardened as a bonus. **ctx-wire is fully
-  removed.** lean-ctx runs in **hybrid** mode (MCP + shell compression).
-- **`fr`:** keep French output. **ctx-wire is kept** for its FR/EN dotnet+git
-  filters, and lean-ctx is installed in **MCP-only** mode so the two compression
-  layers don't double-process the shell. More moving parts; choose only if you
-  want French .NET output preserved verbatim.
+The script neutralizes the gap by exporting `DOTNET_CLI_UI_LANGUAGE=en`
+(+ `VSLANG=1033`) in `env.sh`, so the SDK emits English regardless of host locale.
+lean-ctx's built-in (error-preserving, well-tested) compressor then works, **and**
+serena-forge's own `dotnet build` safety-net grep is hardened as a bonus. This is
+why **ctx-wire is removed entirely** — there's nothing left for it to do. lean-ctx
+runs in **hybrid** mode (MCP + shell compression).
 
-### `--codegraph=keep` (default) vs `drop`
+## CodeGraph is removed
 
-Keep the cross-repo CodeGraph graph — lean-ctx cannot replace it (per-repo graph
-only). `drop` relies on lean-ctx multi-repo **search** across registered roots,
-which is fine if your CodeGraph use is "find/read across repos" but loses
-cross-repo dependency/impact traversal.
+CodeGraph is retired. lean-ctx's multi-repo **search** takes over the cross-repo
+find/read case: the installer registers each repo under `CODE_ROOT` as a lean-ctx
+root and **builds its index on install** (`lean-ctx index build` + `graph build`,
+both incremental on re-run). The trade-off, accepted deliberately: lean-ctx has no
+cross-repo **graph**, so cross-repo dependency/impact traversal is gone — that work
+now leans on per-repo Serena (exact C#) plus lean-ctx search. On an existing box the
+migration unwires CodeGraph's MCP server, removes its `codegraph-root` cd-wrapper,
+and strips its managed block from `~/.claude/CLAUDE.md`.
+
+## RTK — evaluated, skipped as redundant
+
+RTK ("Rust Token Killer") is a shell-output compressor (filter/group/truncate/dedup
+over 100+ commands) that installs as a Claude Code PreToolUse hook. It **is** listed
+in lean-ctx's addon registry (`lean-ctx addon add rtk`), but as a second-class,
+manually-bridged entry. The problem is overlap, not synergy: RTK does the same job
+lean-ctx already does in its L1/L3 pipeline, so enabling it as an addon
+**double-processes** the same shell stream (compress → re-compress) with no
+documented guard. The independent [tokbench](https://github.com/Entelligentsia/tokbench)
+benchmark found every such middleware *increased* billed tokens against a
+well-governed harness (RTK the least bad at +27%, but still worse than native), with
+no evidence that stacking helps. **Decision: skip RTK.** If you ever want to A/B a
+shell-output compressor, install RTK standalone as its own hook and measure against
+the provider bill — do not wire it through lean-ctx's addon pipeline.
+
+## Decision points (flags)
 
 ### `--leanctx-edit=guard` (default) vs `off`
 
@@ -121,16 +136,17 @@ whole store into a repo, set `LEAN_CTX_DATA_DIR`.
 ## Running it
 
 ```bash
-# Default (recommended): English .NET output, keep CodeGraph, guard lean-ctx edits
+# Default: forced-English .NET, CodeGraph removed, lean-ctx indexes each repo,
+# lean-ctx edits guarded (Serena owns .cs)
 bash serena-forge/setup/install-wsl.sh          # add -y for unattended
 
-# Keep French .NET output (keeps ctx-wire, lean-ctx MCP-only)
-bash serena-forge/setup/install-wsl.sh --dotnet-lang=fr
+# Disable lean-ctx's edit tools entirely (all editing native + Serena)
+bash serena-forge/setup/install-wsl.sh --leanctx-edit=off
 
 # Also git-sync lean-ctx knowledge into a repo
 bash serena-forge/setup/install-wsl.sh --leanctx-kb-repo=~/second-brain
 ```
 
 The script is idempotent: on an existing box it uninstalls caveman/ponytail,
-removes ctx-wire (English path), installs+configures lean-ctx, updates serena-forge
-to v0.3.0 (new hooks), and never re-asks stored secrets.
+removes ctx-wire, unwires CodeGraph, installs+configures+indexes lean-ctx, updates
+serena-forge to v0.3.0 (new hooks), and never re-asks stored secrets.

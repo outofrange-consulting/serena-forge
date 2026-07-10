@@ -23,7 +23,7 @@ the new guard hooks. Re-running the script converges any box onto the new stack.
 | **ctx-wire** | ✅ Removed | lean-ctx's shell-compression modules + 10 read modes supersede it. Its only remaining edge was French .NET filters — neutralized by forcing English .NET output (below). |
 | **caveman** | ✅ Removed | Compression is native in lean-ctx (content-addressed cache, ~13-token cached re-reads, pressure auto-downgrade). |
 | **ponytail** | ✅ Removed | Tool profiles (minimal/standard/power) + pressure-based degradation cover the "don't over-fetch" role. |
-| **CodeGraph** | ✅ Removed | Retired in favor of lean-ctx multi-repo **search** (each repo registered + indexed as a root on install). Trade-off accepted: lean-ctx has no cross-repo **graph**/impact — that use case moves to per-repo Serena + lean-ctx search. Migration unwires the CodeGraph MCP server, its cd-wrapper, and its `CLAUDE.md` block. |
+| **CodeGraph** | ❌ Kept | lean-ctx cannot replace it: its graph is keyed to a single `project_root`, and its multi-repo feature is cross-repo **search** (RRF fusion), not a graph. `dev-team` also targets `mcp__codegraph__*` directly from 3 hooks, 2 agents and 4 skills. Kept as the one root index over `CODE_ROOT`. |
 | **RTK** | ✅ Skipped | Redundant with lean-ctx — same job (compress/dedup/truncate/filter shell output), different layer. tokbench shows no stacking benefit and added latency. See "RTK" below. |
 | **Serena** | ❌ Kept | lean-ctx is tree-sitter (syntactic); Serena is **Roslyn** (the real C# compiler). No contest for C# symbol edits/refactors/diagnostics. lean-ctx has zero .NET/Roslyn awareness. |
 | **second-brain** | ❌ Kept | Different scope — business knowledge, not code memory (see below). |
@@ -62,16 +62,25 @@ serena-forge's own `dotnet build` safety-net grep is hardened as a bonus. This i
 why **ctx-wire is removed entirely** — there's nothing left for it to do. lean-ctx
 runs in **hybrid** mode (MCP + shell compression).
 
-## CodeGraph is removed
+## CodeGraph is kept — three layers, one arbitration rule
 
-CodeGraph is retired. lean-ctx's multi-repo **search** takes over the cross-repo
-find/read case: the installer registers each repo under `CODE_ROOT` as a lean-ctx
-root and **builds its index on install** (`lean-ctx index build` + `graph build`,
-both incremental on re-run). The trade-off, accepted deliberately: lean-ctx has no
-cross-repo **graph**, so cross-repo dependency/impact traversal is gone — that work
-now leans on per-repo Serena (exact C#) plus lean-ctx search. On an existing box the
-migration unwires CodeGraph's MCP server, removes its `codegraph-root` cd-wrapper,
-and strips its managed block from `~/.claude/CLAUDE.md`.
+lean-ctx was a candidate replacement and does not qualify. Its `graph build` is
+scoped to a single `project_root`, and `ctx_multi_repo` is cross-repo **search**
+(RRF fusion over per-repo indexes), not a cross-repo graph. `dev-team` (10.3.0)
+also calls `mcp__codegraph__*` from 3 hooks, 2 agents and 4 skills — soft,
+fail-open dependencies, but dropping the server degrades all of them silently.
+
+So all three layers stay, and the installer writes a managed block into
+`~/.claude/CLAUDE.md` telling the agent which to reach for:
+
+- **CodeGraph** — structure and blast radius, across every repo under `CODE_ROOT`. One root index, one MCP server (`codegraph-root`).
+- **lean-ctx** — compression, search and code memory. Its graph is per-repo, so it is not a CodeGraph substitute.
+- **Serena** — C# symbols, via Roslyn. Owns `.cs` reads and all `.cs` edits.
+- **Read/Grep/Glob** — confirming one specific detail once a layer above located it.
+
+The installer runs `codegraph init -i` / `codegraph sync` at `CODE_ROOT`, registers
+the server, then indexes each repo with lean-ctx and Serena. All three are
+incremental on re-run.
 
 ## RTK — evaluated, skipped as redundant
 
@@ -136,7 +145,7 @@ whole store into a repo, set `LEAN_CTX_DATA_DIR`.
 ## Running it
 
 ```bash
-# Default: forced-English .NET, CodeGraph removed, lean-ctx indexes each repo,
+# Default: forced-English .NET, CodeGraph root index, lean-ctx indexes each repo,
 # lean-ctx edits guarded (Serena owns .cs)
 bash serena-forge/setup/install-wsl.sh          # add -y for unattended
 
@@ -148,5 +157,8 @@ bash serena-forge/setup/install-wsl.sh --leanctx-kb-repo=~/second-brain
 ```
 
 The script is idempotent: on an existing box it uninstalls caveman/ponytail,
-removes ctx-wire, unwires CodeGraph, installs+configures+indexes lean-ctx, updates
-serena-forge to v0.3.0 (new hooks), and never re-asks stored secrets.
+removes ctx-wire (binary, config and `CLAUDE.md` block), installs+configures+indexes
+lean-ctx and CodeGraph, vendors the skills, restores the local Claude Code config
+(statusline, auto-compact window, PostToolUse hooks) and the tmux ↔ Windows
+clipboard bridge, updates serena-forge to v0.3.0 (new hooks), and never re-asks
+stored secrets.

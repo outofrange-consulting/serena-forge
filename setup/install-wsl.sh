@@ -2,10 +2,10 @@
 # serena-forge — WSL workstation bootstrap, lean-ctx edition.
 #
 # Swaps the ctx-wire + caveman + ponytail compression stack for a single Rust
-# binary (lean-ctx) and, on an existing box, MIGRATES the old stack away —
-# including CodeGraph, which is retired: lean-ctx's multi-repo search covers the
-# cross-repo "find/read" case, and Serena owns C# symbol intelligence. Everything
-# else (Serena via serena-forge, dev-team, second-brain, domain CLIs) is kept.
+# binary (lean-ctx) and, on an existing box, MIGRATES the old stack away.
+# CodeGraph is KEPT: dev-team's hooks and agents target mcp__codegraph__*, and
+# lean-ctx's graph is per-repo only (its multi-repo feature is search, not graph),
+# so the cross-repo structural query has no other home. Serena owns C# symbols.
 #
 # Idempotent: safe to re-run. Tools refresh to latest by default; config and
 # secrets are preserved; the migration step converges an old box onto the new
@@ -18,23 +18,25 @@
 #   Plugins         : serena-forge (this repo — Serena force + destructive guard
 #                     + lean-ctx guard hooks), dev-team@bfinster (upstream
 #                     bdfinst/agentic-dev-team)
-#                     REMOVED vs the old stack: caveman, ponytail, ctx-wire,
-#                     CodeGraph (superseded by lean-ctx)
+#                     REMOVED vs the old stack: caveman, ponytail, ctx-wire
 #   Context layer   : lean-ctx (leanctx.com) — hybrid mode (MCP tools + shell
 #                     output compression), tool profile + per-repo index built on
-#                     install. Replaces ctx-wire + caveman + ponytail + CodeGraph.
-#   Skills (~/.claude/skills) : atlassian (acli), context7 (from
-#                     outofrange-consulting/omp-dev-team) + azure-devops,
-#                     aspire-cli, datadog
+#                     install. Replaces ctx-wire + caveman + ponytail.
+#   Code graph      : CodeGraph — ONE index at CODE_ROOT, served to every session
+#                     by a user-scope MCP server. Cross-repo structure/impact.
+#   Skills (~/.claude/skills) : all vendored in setup/skills — atlassian (acli +
+#                     MCP fallback), context7, azure-devops, aspire-cli, datadog
 #   CLI tools       : acli (Atlassian), az + azure-devops extension, ctx7 (docs),
 #                     aspire (.NET Aspire CLI), pup (Datadog CLI, EU), aoe (tmux
 #                     multi-agent), Docker Engine (native WSL)
 #   dev-team tooling: ast-grep, semgrep, Stryker.NET (global)
-#   Repo indexing   : Serena `project index` per C# repo, and each repo registered
-#                     + indexed as a lean-ctx root (cross-repo SEARCH replaces
-#                     CodeGraph's cross-repo graph — note lean-ctx has no
-#                     cross-repo GRAPH/impact, see setup/LEAN-CTX-MIGRATION.md)
-#   MCP             : Miro remote MCP (OAuth via /mcp in-session)
+#   Repo indexing   : Serena `project index` per C# repo, CodeGraph once at the
+#                     code root, lean-ctx `index build` + `graph build` per repo
+#   MCP             : Miro (remote, OAuth via /mcp), Atlassian (local Docker
+#                     server — the acli skill's write fallback), CodeGraph (root)
+#   Local config    : ~/.claude/settings.json managed block (statusline, auto-compact
+#                     window, CRLF + no-comments PostToolUse hooks), ~/.tmux.conf
+#                     clipboard bridge, WSLInterop binfmt registration
 #   Second brain    : clones outofrange-consulting/second-brain, renders configs,
 #                     installs the RAG engine (business-knowledge vault — distinct
 #                     from lean-ctx's per-repo code memory; both are kept)
@@ -49,7 +51,8 @@
 # echoed) and persisted to ~/.config/claude-tools/secrets.env (chmod 600).
 #   GOOGLE_GEMINI_API_KEY               second-brain embeddings (goes to <brain>/.env)
 #   AZURE_DEVOPS_ORG / _PROJECT / _PAT  az devops defaults + PAT login
-#   ACLI_SITE / ACLI_EMAIL / ACLI_TOKEN Atlassian CLI auth
+#   ACLI_SITE / ACLI_EMAIL / ACLI_TOKEN Atlassian CLI auth — also feed the
+#                                       Atlassian MCP server (same site + token)
 #
 # Flags:
 #   -y, --yes            non-interactive: never prompt (missing secrets skipped)
@@ -64,11 +67,13 @@
 #   --brain-dir=DIR      where the second brain lives (default: ~/second-brain)
 #   --code-root=DIR      root folder of your repos for indexing (also CODE_ROOT env)
 #   --skip-brain / --skip-az / --skip-acli / --skip-miro / --skip-dotnet /
-#   --skip-index / --skip-leanctx   skip that component entirely
+#   --skip-index / --skip-leanctx / --skip-atlassian-mcp / --skip-local-config
+#                        skip that component entirely
 #   -h, --help           this help
 set -euo pipefail
 
 YES=0; NO_UPDATE=0; SKIP_BRAIN=0; SKIP_AZ=0; SKIP_ACLI=0; SKIP_MIRO=0; SKIP_DOTNET=0; SKIP_INDEX=0; SKIP_LEANCTX=0
+SKIP_ATLASSIAN_MCP=0; SKIP_LOCAL_CONFIG=0
 LEANCTX_EDIT=guard; LEANCTX_PROFILE=standard; LEANCTX_KB_REPO=""
 BRAIN_DIR="${SECOND_BRAIN_DIR:-$HOME/second-brain}"
 for a in "$@"; do case "$a" in
@@ -82,7 +87,9 @@ for a in "$@"; do case "$a" in
   --skip-brain) SKIP_BRAIN=1 ;; --skip-az) SKIP_AZ=1 ;; --skip-acli) SKIP_ACLI=1 ;;
   --skip-miro) SKIP_MIRO=1 ;; --skip-dotnet) SKIP_DOTNET=1 ;; --skip-index) SKIP_INDEX=1 ;;
   --skip-leanctx) SKIP_LEANCTX=1 ;;
-  -h|--help) sed -n '2,68p' "$0"; exit 0 ;;
+  --skip-atlassian-mcp) SKIP_ATLASSIAN_MCP=1 ;;
+  --skip-local-config) SKIP_LOCAL_CONFIG=1 ;;
+  -h|--help) sed -n '2,72p' "$0"; exit 0 ;;
   *) echo "unknown arg: $a" >&2; exit 2 ;;
 esac; done
 
@@ -409,6 +416,17 @@ uninstall_plugin() {  # uninstall_plugin <plugin> <marketplace>
   fi
 }
 
+USER_CLAUDE_MD="$HOME/.claude/CLAUDE.md"
+
+strip_claude_md_block() {  # strip_claude_md_block <begin-marker> <end-marker>
+  local b="$1" e="$2" tmp
+  [ -f "$USER_CLAUDE_MD" ] || return 0
+  grep -qF "$b" "$USER_CLAUDE_MD" 2>/dev/null || return 1
+  tmp="$(mktemp)"
+  awk -v b="$b" -v e="$e" '$0==b{skip=1} !skip{print} $0==e{skip=0}' "$USER_CLAUDE_MD" > "$tmp" \
+    && mv "$tmp" "$USER_CLAUDE_MD"
+}
+
 remove_ctx_wire() {
   if have ctx-wire; then
     say "Migration: removing ctx-wire (replaced by lean-ctx + forced-English dotnet)"
@@ -425,27 +443,20 @@ remove_ctx_wire() {
       grep -qsF "ctx-wire shim" "$f" 2>/dev/null && rm -f "$f" 2>/dev/null || true
     done
   fi
+  # ctx-wire writes its own instruction block into the user's CLAUDE.md. Left
+  # behind, it tells the agent to shell out through a binary we just deleted.
+  strip_claude_md_block "<!-- ctx-wire-instructions -->" "<!-- /ctx-wire-instructions -->" \
+    && ok "ctx-wire block stripped from ~/.claude/CLAUDE.md"
+  return 0
 }
 
-remove_codegraph() {
-  # Retire CodeGraph: unregister the user-scope MCP server, drop its cd-wrapper,
-  # and strip the managed routing block from ~/.claude/CLAUDE.md. The binary and
-  # any per-repo .codegraph/ indexes are left on disk (harmless, user-owned) — we
-  # only unwire it from Claude Code so it stops loading.
-  local changed=0
-  if have claude && claude mcp get codegraph >/dev/null 2>&1; then
-    say "Migration: unregistering the CodeGraph MCP server (retired)"
-    claude mcp remove -s user codegraph >/dev/null 2>&1 || claude mcp remove codegraph >/dev/null 2>&1 || true
-    changed=1
-  fi
-  [ -f "$HOME/.local/bin/codegraph-root" ] && { rm -f "$HOME/.local/bin/codegraph-root"; changed=1; }
-  local md="$HOME/.claude/CLAUDE.md" b="<!-- >>> serena-forge setup: codegraph root >>> -->" e="<!-- <<< serena-forge setup: codegraph root <<< -->" tmp
-  if [ -f "$md" ] && grep -qF "$b" "$md" 2>/dev/null; then
-    tmp="$(mktemp)"
-    awk -v b="$b" -v e="$e" '$0==b{skip=1} !skip{print} $0==e{skip=0}' "$md" > "$tmp" && mv "$tmp" "$md"
-    changed=1
-  fi
-  [ "$changed" = 1 ] && ok "CodeGraph unwired from Claude Code (lean-ctx multi-repo takes over cross-repo search)"
+# dev-team 8.x briefly routed structural queries to a `codebase-memory` server.
+# 10.x is back on CodeGraph and no cbm server exists — rewrite the stale line.
+fix_stale_claude_md() {
+  [ -f "$USER_CLAUDE_MD" ] || return 0
+  grep -q 'codebase-memory' "$USER_CLAUDE_MD" 2>/dev/null || return 0
+  sed -i 's/`codebase-memory` graph/`codegraph` graph/g' "$USER_CLAUDE_MD"
+  ok "~/.claude/CLAUDE.md: codebase-memory -> codegraph"
 }
 
 migrate_obsolete() {
@@ -453,16 +464,17 @@ migrate_obsolete() {
   uninstall_plugin caveman  caveman
   uninstall_plugin ponytail ponytail
   remove_ctx_wire
-  remove_codegraph
+  fix_stale_claude_md
   local s
   for s in caveman yagni; do
     [ -d "$HOME/.claude/skills/$s" ] && { rm -rf "$HOME/.claude/skills/$s"; ok "removed stale mirrored skill $s"; }
   done
+  return 0
 }
 
 # ---------------------------------------------------------------------------
-# Plugins & marketplaces (serena-forge + upstream agentic-dev-team). caveman,
-# ponytail and CodeGraph are intentionally NOT installed — see migrate_obsolete.
+# Plugins & marketplaces (serena-forge + upstream agentic-dev-team). caveman and
+# ponytail are intentionally NOT installed — see migrate_obsolete.
 # ---------------------------------------------------------------------------
 ensure_plugin() {
   local repo="$1" market="$2" plugin="$3"
@@ -488,10 +500,12 @@ ensure_plugins() {
 }
 
 # ---------------------------------------------------------------------------
-# Skills (~/.claude/skills) — mirrored copies, refreshed on every run
+# Skills (~/.claude/skills) — all vendored under setup/skills, copied on every
+# run. install_skill wipes its destination, so a skill edited in ~/.claude/skills
+# is lost on the next run: change it HERE, in the repo.
 # ---------------------------------------------------------------------------
 install_skill() {
-  local src="$1" name="$2" dest="$HOME/.claude/skills/$2"
+  local name="$1" src="$ROOT/setup/skills/$1" dest="$HOME/.claude/skills/$1"
   [ -d "$src" ] || { warn "skill source missing: $src"; return 0; }
   rm -rf "$dest"; mkdir -p "$(dirname "$dest")"
   cp -R "$src" "$dest"
@@ -500,12 +514,8 @@ install_skill() {
 
 ensure_skills() {
   say "Skills"
-  local td="$SRC_DIR/omp-dev-team/plugins/token-diet/skills"
-  install_skill "$td/atlassian" atlassian
-  install_skill "$td/context7"  context7
-  install_skill "$ROOT/setup/skills/azure-devops" azure-devops
-  install_skill "$ROOT/setup/skills/aspire-cli"   aspire-cli
-  install_skill "$ROOT/setup/skills/datadog"      datadog
+  local s
+  for s in atlassian context7 azure-devops aspire-cli datadog; do install_skill "$s"; done
 }
 
 # ---------------------------------------------------------------------------
@@ -518,7 +528,7 @@ ensure_lean_ctx() {
   else
     say "Installing/updating lean-ctx (context layer)"
     if have lean-ctx; then
-      lean-ctx self update >/dev/null 2>&1 || lean-ctx update >/dev/null 2>&1 || true
+      lean-ctx update >/dev/null 2>&1 || true
     fi
     if ! have lean-ctx; then
       curl -fsSL https://leanctx.com/install.sh | sh >/dev/null 2>&1 || true
@@ -653,6 +663,70 @@ ensure_aoe() {
   have aoe && ok "aoe $(aoe --version 2>/dev/null | head -1)" || warn "aoe not on PATH"
 }
 
+# systemd-binfmt rewrites /proc/sys/fs/binfmt_misc from /usr/lib/binfmt.d and
+# drops WSL's own WSLInterop registration, after which every Windows .exe fails
+# with "Exec format error" — including the PowerShell clipboard bridge below.
+# Declaring it as a binfmt.d unit makes the registration survive the rewrite.
+ensure_wsl_interop() {
+  grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null || return 0
+  local conf=/usr/lib/binfmt.d/WSLInterop.conf line=':WSLInterop:M::MZ::/init:PF'
+  if [ "$(cat "$conf" 2>/dev/null)" != "$line" ]; then
+    say "Registering WSLInterop with systemd-binfmt"
+    printf '%s\n' "$line" | sudo tee "$conf" >/dev/null || { warn "could not write $conf"; return 0; }
+  fi
+  if [ ! -e /proc/sys/fs/binfmt_misc/WSLInterop ]; then
+    sudo systemctl restart systemd-binfmt >/dev/null 2>&1 || warn "systemd-binfmt restart failed"
+  fi
+  [ -e /proc/sys/fs/binfmt_misc/WSLInterop ] \
+    && ok "WSLInterop registered (Windows .exe callable)" \
+    || warn "WSLInterop still unregistered — Windows executables will fail"
+  return 0
+}
+
+# Copy/paste between tmux panes and the Windows clipboard. wl-copy is unreliable
+# under WSLg and clip.exe mangles UTF-8, so both directions go through PowerShell
+# with the encoding pinned. Mouse stays OFF: Claude Code panes capture the mouse,
+# tmux never enters copy-mode, and a drag falls through to Windows Terminal's
+# native selection (which needs copyOnSelect:true on the Windows side).
+ensure_tmux_clipboard() {
+  local ps1=/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe
+  [ -x "$ps1" ] || { warn "powershell.exe not found — skipping the tmux clipboard bridge"; return 0; }
+  say "tmux clipboard bridge (Windows)"
+
+  cat > "$HOME/.local/bin/tmux-clip-copy" <<EOF
+#!/bin/sh
+# Managed by serena-forge setup/install-wsl.sh — regenerated on every run.
+exec $ps1 -NoProfile -Command '[Console]::InputEncoding=[Text.Encoding]::UTF8; Set-Clipboard -Value ([Console]::In.ReadToEnd())'
+EOF
+  cat > "$HOME/.local/bin/tmux-clip-paste" <<EOF
+#!/bin/sh
+# Managed by serena-forge setup/install-wsl.sh — regenerated on every run.
+exec $ps1 -NoProfile -Command '[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Clipboard -Raw'
+EOF
+  chmod +x "$HOME/.local/bin/tmux-clip-copy" "$HOME/.local/bin/tmux-clip-paste"
+
+  local conf="$HOME/.tmux.conf" b="# >>> serena-forge managed >>>" e="# <<< serena-forge managed <<<" tmp
+  touch "$conf"; tmp="$(mktemp)"
+  awk -v b="$b" -v e="$e" '$0==b{skip=1} !skip{print} $0==e{skip=0}' "$conf" > "$tmp"
+  {
+    cat "$tmp"
+    printf '%s\n' "$b"
+    cat <<EOF
+set -g mouse off
+set -g mode-keys vi
+set -g set-clipboard on
+set -g copy-command '$HOME/.local/bin/tmux-clip-copy'
+bind-key -T copy-mode-vi y send-keys -X copy-pipe-and-cancel
+bind-key -T copy-mode-vi Enter send-keys -X copy-pipe-and-cancel
+bind-key p run-shell '$HOME/.local/bin/tmux-clip-paste | tmux load-buffer - && tmux paste-buffer'
+EOF
+    printf '%s\n' "$e"
+  } > "$conf"
+  rm -f "$tmp"
+  ok "~/.tmux.conf clipboard block + tmux-clip-copy/paste wrappers"
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # acli (Atlassian CLI)
 # ---------------------------------------------------------------------------
@@ -716,8 +790,21 @@ ensure_az_devops() {
 }
 
 # ---------------------------------------------------------------------------
-# dev-team tooling: ast-grep, semgrep (CodeGraph is retired)
+# dev-team tooling: CodeGraph, ast-grep, semgrep
 # ---------------------------------------------------------------------------
+ensure_codegraph() {
+  if have codegraph; then
+    [ "$NO_UPDATE" = 1 ] || { say "Updating CodeGraph"; codegraph upgrade >/dev/null 2>&1 || true; }
+  else
+    say "Installing CodeGraph"
+    if have npm; then npm install -g @colbymchenry/codegraph >/dev/null 2>&1 || true; fi
+    have codegraph || curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | sh || true
+    hash -r 2>/dev/null || true
+  fi
+  have codegraph && ok "codegraph $(codegraph --version 2>/dev/null | head -1)" \
+    || warn "codegraph install failed — https://github.com/colbymchenry/codegraph"
+}
+
 ensure_ast_grep() {
   have npm || { warn "npm missing — skipping ast-grep"; return 0; }
   if have ast-grep && [ "$NO_UPDATE" = 1 ]; then ok "ast-grep $(ast-grep --version 2>/dev/null)"; return; fi
@@ -756,48 +843,149 @@ run_ticking() {
   return "$rc"
 }
 
-# Build/refresh lean-ctx's index for a repo so the first cross-repo search/read
-# isn't a cold start. `index build` and `graph build` are incremental (unchanged
-# files reused via content hash), so this is cheap to re-run on every install.
-leanctx_index_repo() {  # leanctx_index_repo <repo>
-  local repo="$1"
-  have lean-ctx || return 0
-  [ "$SKIP_LEANCTX" = 1 ] && return 0
-  # Register the repo as a persistent multi-repo root (idempotent). CLI surface
-  # has shifted across versions, so try the known forms and fall back quietly.
-  lean-ctx multi-repo add-root "$repo" "$(basename "$repo")" >/dev/null 2>&1 \
-    || lean-ctx serve --add-root "$repo" >/dev/null 2>&1 || true
-  ( cd "$repo" && {
-      lean-ctx index build >/dev/null 2>&1 || lean-ctx index build-full >/dev/null 2>&1 || true
-      lean-ctx graph build >/dev/null 2>&1 || true
-    } )
+# CodeGraph: ONE index at $CODE_ROOT covering every repo under it — the cross-repo
+# structural case neither lean-ctx (per-repo graph) nor Serena (per-repo, C#-only)
+# can answer. Served to every session by a user-scope MCP server through a wrapper
+# that cd's to the root first.
+#
+# dev-team's own per-repo CodeGraph wiring stays dormant: codegraph_bootstrap only
+# acts when the REPO's .mcp.json references codegraph, and codegraph_nudge's
+# sentinel is a repo-local .codegraph/ dir. We create neither, so only the root
+# graph is exposed — and dev-team's turn-mark hook matches mcp__codegraph__* anyway.
+register_codegraph_root() {  # register_codegraph_root <root>
+  local root="$1" wrapper="$HOME/.local/bin/codegraph-root"
+  cat > "$wrapper" <<EOF
+#!/bin/sh
+# Managed by serena-forge setup/install-wsl.sh — regenerated on every run.
+# Serves the CODE_ROOT-level CodeGraph index to every Claude Code session.
+cd "$root" || exit 1
+exec codegraph serve --mcp
+EOF
+  chmod +x "$wrapper"
+  if have claude && ! claude mcp get codegraph >/dev/null 2>&1; then
+    claude mcp add -s user codegraph -- "$wrapper" >/dev/null 2>&1 \
+      && ok "codegraph MCP registered (user scope, root graph)" \
+      || warn "codegraph MCP registration failed — run: claude mcp add -s user codegraph -- $wrapper"
+  fi
+}
+
+# Managed block in ~/.claude/CLAUDE.md, replaced in place on every run. Three
+# code-intelligence layers ship together, so the routing has to be stated once.
+write_codegraph_claude_md() {  # write_codegraph_claude_md <root>
+  local root="$1" tmp
+  local b="<!-- >>> serena-forge setup: codegraph root >>> -->" e="<!-- <<< serena-forge setup: codegraph root <<< -->"
+  mkdir -p "$(dirname "$USER_CLAUDE_MD")"; touch "$USER_CLAUDE_MD"
+  tmp="$(mktemp)"
+  awk -v b="$b" -v e="$e" '$0==b{skip=1} !skip{print} $0==e{skip=0}' "$USER_CLAUDE_MD" > "$tmp"
+  {
+    cat "$tmp"
+    printf '\n%s\n' "$b"
+    cat <<EOF
+## Code intelligence — three layers, one rule each
+- **CodeGraph** (\`mcp__codegraph__*\`) — structure. A user-scope MCP server holds
+  ONE graph over every repo under \`$root\`. Use it for cross-repo or multi-file
+  exploration, "who calls X", and blast radius, before any Read/Grep sweep.
+- **lean-ctx** (\`ctx_*\`) — compression, search and code memory. Its graph is
+  per-repo, so it does not replace CodeGraph for cross-repo questions.
+- **Serena** (serena-forge) — C# symbols. The Roslyn source of truth for reading
+  and editing \`.cs\` in the current repo. Never edit C# around it.
+
+Read/Grep/Glob stay for confirming one specific detail you already located.
+EOF
+    printf '%s\n' "$e"
+  } > "$USER_CLAUDE_MD"
+  rm -f "$tmp"
+  ok "code-intelligence routing note written to ~/.claude/CLAUDE.md (managed block)"
+}
+
+# lean-ctx `index build` and `graph build` are incremental (unchanged files reused
+# via content hash), so this is cheap to re-run. Runs with cwd already at the repo.
+leanctx_index_repo() {
+  lean-ctx index build || lean-ctx index build-full || return 1
+  lean-ctx graph build || return 1
 }
 
 index_repos() {
   [ "$SKIP_INDEX" = 1 ] && return 0
-  say "Repo indexing (Serena per C# repo + lean-ctx roots)"
+  say "Repo indexing (CodeGraph at the root + lean-ctx and Serena per repo)"
   if ! require_var CODE_ROOT "Root folder containing your git repos (e.g. ~/code — Enter to skip indexing)" plain; then
     return 0
   fi
   local root="${CODE_ROOT/#\~/$HOME}"
   [ -d "$root" ] || { warn "CODE_ROOT does not exist: $root — skipping indexing"; return 0; }
 
+  if have codegraph; then
+    if [ -d "$root/.codegraph" ]; then
+      say "CodeGraph: syncing the root graph ($root)"
+      run_ticking "codegraph sync" "$root" codegraph sync && ok "codegraph sync" || warn "codegraph sync failed"
+    else
+      say "CodeGraph: building the root graph ($root — first run can take a while)"
+      run_ticking "codegraph init (first build)" "$root" codegraph init -i && ok "codegraph init" || warn "codegraph init failed"
+    fi
+    [ -d "$root/.codegraph" ] && { register_codegraph_root "$root"; write_codegraph_claude_md "$root"; }
+  fi
+
   local gitdir repo count=0
   while IFS= read -r gitdir; do
     repo="$(dirname "$gitdir")"; count=$((count + 1))
     if have lean-ctx && [ "$SKIP_LEANCTX" = 0 ]; then
-      run_ticking "lean-ctx index $(basename "$repo")" "$repo" leanctx_index_repo "$repo" \
-        && ok "  lean-ctx indexed $(basename "$repo")" || true
+      run_ticking "lean-ctx index $(basename "$repo")" "$repo" leanctx_index_repo \
+        && ok "  lean-ctx indexed $(basename "$repo")" || warn "  lean-ctx index failed for $(basename "$repo")"
     fi
     if have uvx && [ -n "$(find "$repo" -maxdepth 3 \( -name '*.sln' -o -name '*.csproj' \) -not -path '*/bin/*' -not -path '*/obj/*' -print -quit 2>/dev/null)" ]; then
       say "Serena: indexing $repo (Roslyn — can take a while on first run)"
+      # --language csharp: without it Serena auto-creates project.yml, prompts
+      # "enable <lang> too?" on stray files, reads EOF under run_ticking and dies.
       run_ticking "serena index $(basename "$repo")" "$repo" \
         uvx -p 3.13 --from git+https://github.com/oraios/serena serena project index --language csharp "$repo" \
         && ok "  serena index" || warn "  serena index failed"
     fi
   done < <(find "$root" -maxdepth 3 -name .git \( -type d -o -type f \) -not -path '*/node_modules/*' 2>/dev/null)
-  have lean-ctx && [ "$SKIP_LEANCTX" = 0 ] && lean-ctx multi-repo save-config >/dev/null 2>&1 || true
   [ "$count" = 0 ] && warn "no git repos found under $root" || ok "$count repo(s) scanned"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Atlassian MCP — the write fallback behind the `atlassian` skill. acli stays the
+# primary (reads, most writes); this server covers what its build cannot do:
+# Confluence page create/update, worklogs, comment edits, typed links, sprints.
+# NOT the official remote mcp.atlassian.com server — this is sooperset's local
+# container, authenticated with the same site + API token as acli, and narrowed
+# to the gap tools so it doesn't shadow acli's surface.
+# ---------------------------------------------------------------------------
+ATLASSIAN_MCP_IMAGE="ghcr.io/sooperset/mcp-atlassian:latest"
+ATLASSIAN_MCP_TOOLS="jira_add_worklog,jira_get_worklog,jira_edit_comment,jira_link_to_epic,jira_create_remote_issue_link,jira_remove_issue_link,jira_batch_create_issues,jira_batch_create_versions,jira_create_version,jira_get_project_versions,jira_get_project_components,jira_create_sprint,jira_update_sprint,jira_add_issues_to_sprint,jira_search_fields,jira_get_field_options,jira_get_link_types,jira_get_issue_development_info,jira_get_issues_development_info,jira_get_issue_sla,jira_get_issue_dates,jira_get_issue_proforma_forms,jira_get_proforma_form_details,jira_update_proforma_form_answers,jira_get_service_desk_for_project,jira_get_service_desk_queues,jira_get_queue_issues,jira_batch_get_changelogs,jira_get_user_profile,confluence_create_page,confluence_update_page,confluence_delete_page,confluence_move_page,confluence_add_comment,confluence_reply_to_comment,confluence_get_comments,confluence_add_label,confluence_get_labels,confluence_search,confluence_search_user,confluence_get_page_children,confluence_get_space_page_tree,confluence_get_page_history,confluence_get_page_diff,confluence_get_page_views,confluence_get_page_images,confluence_get_attachments,confluence_download_attachment,confluence_download_content_attachments,confluence_upload_attachment,confluence_upload_attachments,confluence_delete_attachment"
+
+ensure_atlassian_mcp() {
+  [ "$SKIP_ATLASSIAN_MCP" = 1 ] && return 0
+  have claude || return 0
+  have docker || { warn "docker missing — skipping the Atlassian MCP server"; return 0; }
+  say "Atlassian MCP (write fallback for the acli skill)"
+  if claude mcp get atlassian >/dev/null 2>&1; then
+    ok "atlassian MCP already registered (remove it first to rotate the token)"
+    return 0
+  fi
+  require_var ACLI_SITE  "Atlassian site (e.g. yourorg.atlassian.net)" plain \
+    && require_var ACLI_EMAIL "Atlassian account email" plain \
+    && require_var ACLI_TOKEN "Atlassian API token" secret \
+    || { warn "Atlassian credentials unavailable — skipping the MCP server"; return 0; }
+
+  docker pull "$ATLASSIAN_MCP_IMAGE" >/dev/null 2>&1 || warn "could not pre-pull $ATLASSIAN_MCP_IMAGE"
+  claude mcp add -s user atlassian \
+    -e "JIRA_URL=https://$ACLI_SITE" \
+    -e "JIRA_USERNAME=$ACLI_EMAIL" \
+    -e "JIRA_API_TOKEN=$ACLI_TOKEN" \
+    -e "CONFLUENCE_URL=https://$ACLI_SITE/wiki" \
+    -e "CONFLUENCE_USERNAME=$ACLI_EMAIL" \
+    -e "CONFLUENCE_API_TOKEN=$ACLI_TOKEN" \
+    -e "ENABLED_TOOLS=$ATLASSIAN_MCP_TOOLS" \
+    -- docker run -i --rm \
+      -e JIRA_URL -e JIRA_USERNAME -e JIRA_API_TOKEN \
+      -e CONFLUENCE_URL -e CONFLUENCE_USERNAME -e CONFLUENCE_API_TOKEN \
+      -e ENABLED_TOOLS "$ATLASSIAN_MCP_IMAGE" >/dev/null 2>&1 \
+    && ok "atlassian MCP registered (mcp__atlassian__* tools appear after a session restart)" \
+    || warn "atlassian MCP registration failed — check 'claude mcp list'"
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -942,6 +1130,73 @@ ensure_pup() {
 }
 
 # ---------------------------------------------------------------------------
+# Local Claude Code config — statusline, context window, PostToolUse hooks.
+#
+# ~/.claude/settings.json is shared with tools that write to it at runtime (aoe
+# injects its own hooks on every launch), so this is a jq merge, never a rewrite.
+# Our hook entries are tagged `# serena-forge managed` and replaced by tag.
+# ---------------------------------------------------------------------------
+ensure_clepsydre() {
+  local dest="$SRC_DIR/clepsydre"
+  clone_or_update "tpierrain/clepsydre" "$dest"
+  [ -f "$dest/clepsydre.mjs" ] || { warn "clepsydre.mjs missing — statusline gauge disabled"; return 1; }
+  say "Statusline (clepsydre gauge)"
+  sed "s|{{CLEPSYDRE}}|$dest/clepsydre.mjs|g" "$ROOT/setup/statusline.sh" > "$HOME/.claude/statusline.sh"
+  chmod +x "$HOME/.claude/statusline.sh"
+  ok "~/.claude/statusline.sh"
+}
+
+ensure_claude_settings() {
+  [ "$SKIP_LOCAL_CONFIG" = 1 ] && return 0
+  have jq || { warn "jq missing — skipping ~/.claude/settings.json"; return 0; }
+  say "Claude Code local settings"
+
+  mkdir -p "$HOME/.claude/scripts"
+  install -m 0755 "$ROOT/setup/scripts/no-comments-check.sh" "$HOME/.claude/scripts/no-comments-check.sh"
+  ok "~/.claude/scripts/no-comments-check.sh"
+
+  ensure_clepsydre || return 0
+
+  local settings="$HOME/.claude/settings.json" managed tmp
+  [ -s "$settings" ] || printf '{}\n' > "$settings"
+  jq empty "$settings" 2>/dev/null || { warn "$settings is not valid JSON — leaving it alone"; return 0; }
+  cp "$settings" "$settings.bak.$(date +%Y%m%dT%H%M%S)"
+
+  managed="$(mktemp)"
+  cat > "$managed" <<'JSON'
+{
+  "matcher": "Edit|Write|MultiEdit|mcp__plugin_serena-forge_serena__(replace_symbol_body|insert_after_symbol|insert_before_symbol|replace_in_files|replace_content|create_text_file|rename_symbol|safe_delete_symbol)",
+  "hooks": [
+    {
+      "type": "command",
+      "statusMessage": "Normalizing line endings to CRLF",
+      "command": "f=$(jq -r '.tool_input.file_path // .tool_input.relative_path // empty'); [ -n \"$f\" ] && [ -f \"$f\" ] && case \"$f\" in *.cs|*.csproj|*.props|*.targets|*.json|*.editorconfig|*.md|*.yml|*.yaml) perl -i -pe 's/\\r?\\n/\\r\\n/' \"$f\";; esac 2>/dev/null || true # serena-forge managed"
+    },
+    {
+      "type": "command",
+      "statusMessage": "Checking for forbidden comments",
+      "command": "f=$(jq -r '.tool_input.file_path // .tool_input.relative_path // empty'); case \"$f\" in *.cs) cd \"$(dirname \"$f\")\" 2>/dev/null && \"$HOME/.claude/scripts/no-comments-check.sh\" HEAD;; esac # serena-forge managed"
+    }
+  ]
+}
+JSON
+
+  tmp="$(mktemp)"
+  jq --slurpfile m "$managed" --arg sl "bash \"$HOME/.claude/statusline.sh\"" '
+    .env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = "230000"
+    | .statusLine = { type: "command", command: $sl, padding: 0 }
+    | .hooks.PostToolUse = (
+        ((.hooks.PostToolUse // [])
+          | map(select([.hooks[]?.command // "" | contains("serena-forge managed")] | any | not)))
+        + $m )
+  ' "$settings" > "$tmp" && mv "$tmp" "$settings" \
+    && ok "settings.json: statusline, auto-compact window, CRLF + no-comments hooks" \
+    || warn "settings.json merge failed — restore from the .bak next to it"
+  rm -f "$managed" "$tmp"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
 # Doctor
 # ---------------------------------------------------------------------------
 doctor() {
@@ -975,9 +1230,17 @@ doctor() {
   check az       optional
   check aspire   optional "aspire --version"
   check pup      optional "pup --version"
+  check codegraph optional "codegraph --version"
+  check tmux     optional "tmux -V"
+  have claude && ! claude mcp get codegraph >/dev/null 2>&1 \
+    && warn "codegraph MCP not registered — re-run without --skip-index"
+  have claude && [ "$SKIP_ATLASSIAN_MCP" = 0 ] && ! claude mcp get atlassian >/dev/null 2>&1 \
+    && warn "atlassian MCP not registered — the acli skill loses its write fallback"
+  [ -x "$HOME/.claude/statusline.sh" ] || warn "~/.claude/statusline.sh missing"
+  grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null && [ ! -e /proc/sys/fs/binfmt_misc/WSLInterop ] \
+    && { warn "WSLInterop unregistered — Windows .exe (clipboard bridge) will fail"; fail=1; }
   # Retired tools should be GONE after migration.
   have ctx-wire  && warn "ctx-wire is still installed — it should have been removed; run: ctx-wire shims uninstall && rm \$(command -v ctx-wire)"
-  have claude && claude mcp get codegraph >/dev/null 2>&1 && warn "codegraph MCP still registered — run: claude mcp remove -s user codegraph"
   for t in claude node; do
     have "$t" && ! bash -lc "command -v $t" >/dev/null 2>&1 \
       && warn "$t is not visible from a fresh login shell — check ~/.profile"
@@ -1001,24 +1264,28 @@ ensure_node
 ensure_uv
 ensure_dotnet
 ensure_claude
-clone_or_update "$GH_ORG/omp-dev-team" "$SRC_DIR/omp-dev-team"
+ensure_wsl_interop
 migrate_obsolete
 ensure_plugins
 ensure_skills
 ensure_lean_ctx
 install_leanctx_kb_sync
+ensure_codegraph
 ensure_ctx7
 ensure_docker
 ensure_aoe
+ensure_tmux_clipboard
 ensure_ast_grep
 ensure_semgrep
 ensure_dotnet_tools
 ensure_aspire
 ensure_pup
 ensure_acli
+ensure_atlassian_mcp
 ensure_az_devops
 ensure_miro
 ensure_second_brain
+ensure_claude_settings
 index_repos
 doctor || true
 
@@ -1026,7 +1293,8 @@ echo
 echo "Next steps:"
 echo "  1. Open a NEW shell (or: source ~/.config/claude-tools/env.sh)"
 echo "  2. 'claude' -> log in, then /mcp to finish the Miro OAuth"
-echo "  3. In a C# repo: /serena-forge-setup to onboard Serena"
-echo "  4. lean-ctx: 'lean-ctx doctor' to confirm wiring; ctx_* tools appear in-session"
-[ -n "$LEANCTX_KB_REPO" ] && echo "  5. Knowledge git-sync: run 'leanctx-kb-sync' to snapshot lean-ctx memory as OKF into $LEANCTX_KB_REPO"
+echo "  3. Restart any running Claude Code session: the atlassian + codegraph MCP servers and the statusline are picked up at startup"
+echo "  4. In a C# repo: /serena-forge-setup to onboard Serena"
+echo "  5. lean-ctx: 'lean-ctx doctor' to confirm wiring; ctx_* tools appear in-session"
+[ -n "$LEANCTX_KB_REPO" ] && echo "  6. Knowledge git-sync: run 'leanctx-kb-sync' to snapshot lean-ctx memory as OKF into $LEANCTX_KB_REPO"
 echo "Re-run this script anytime — it updates everything, migrates an old box, and never re-asks stored secrets."

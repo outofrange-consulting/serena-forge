@@ -445,13 +445,20 @@ uninstall_plugin() {  # uninstall_plugin <plugin> <marketplace>
 
 USER_CLAUDE_MD="$HOME/.claude/CLAUDE.md"
 
-strip_claude_md_block() {  # strip_claude_md_block <begin-marker> <end-marker>
-  local b="$1" e="$2" tmp
-  [ -f "$USER_CLAUDE_MD" ] || return 0
-  grep -qF "$b" "$USER_CLAUDE_MD" 2>/dev/null || return 1
+# Strip a managed <begin>..<end> block. Line comparison is CRLF-tolerant: the
+# file may be CRLF (a PostToolUse formatter rewrites it) while the markers are LF,
+# so an exact $0==marker match would silently never fire.
+strip_block() {  # strip_block <file> <begin-marker> <end-marker>
+  local f="$1" b="$2" e="$3" tmp
+  [ -f "$f" ] || return 0
+  grep -qF "$b" "$f" 2>/dev/null || return 1
   tmp="$(mktemp)"
-  awk -v b="$b" -v e="$e" '$0==b{skip=1} !skip{print} $0==e{skip=0}' "$USER_CLAUDE_MD" > "$tmp" \
-    && mv "$tmp" "$USER_CLAUDE_MD"
+  awk -v b="$b" -v e="$e" '{l=$0; sub(/\r$/,"",l)} l==b{skip=1} !skip{print} l==e{skip=0}' "$f" > "$tmp" \
+    && mv "$tmp" "$f"
+}
+
+strip_claude_md_block() {  # strip_claude_md_block <begin-marker> <end-marker>
+  strip_block "$USER_CLAUDE_MD" "$1" "$2"
 }
 
 remove_ctx_wire() {
@@ -734,7 +741,7 @@ EOF
 
   local conf="$HOME/.tmux.conf" b="# >>> serena-forge managed >>>" e="# <<< serena-forge managed <<<" tmp
   touch "$conf"; tmp="$(mktemp)"
-  awk -v b="$b" -v e="$e" '$0==b{skip=1} !skip{print} $0==e{skip=0}' "$conf" > "$tmp"
+  awk -v b="$b" -v e="$e" '{l=$0; sub(/\r$/,"",l)} l==b{skip=1} !skip{print} l==e{skip=0}' "$conf" > "$tmp"
   {
     cat "$tmp"
     printf '%s\n' "$b"
@@ -903,7 +910,7 @@ write_codegraph_claude_md() {  # write_codegraph_claude_md <root>
   local b="<!-- >>> serena-forge setup: codegraph root >>> -->" e="<!-- <<< serena-forge setup: codegraph root <<< -->"
   mkdir -p "$(dirname "$USER_CLAUDE_MD")"; touch "$USER_CLAUDE_MD"
   tmp="$(mktemp)"
-  awk -v b="$b" -v e="$e" '$0==b{skip=1} !skip{print} $0==e{skip=0}' "$USER_CLAUDE_MD" > "$tmp"
+  awk -v b="$b" -v e="$e" '{l=$0; sub(/\r$/,"",l)} l==b{skip=1} !skip{print} l==e{skip=0}' "$USER_CLAUDE_MD" > "$tmp"
   {
     cat "$tmp"
     printf '\n%s\n' "$b"

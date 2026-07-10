@@ -69,11 +69,13 @@
 #   --skip-brain / --skip-az / --skip-acli / --skip-miro / --skip-dotnet /
 #   --skip-index / --skip-leanctx / --skip-atlassian-mcp / --skip-local-config
 #                        skip that component entirely
+#   --skip-backup        do not snapshot ~/.claude & co before mutating them
+#                        (default: snapshot to ~/.claude-backups/, restore with tar xzf)
 #   -h, --help           this help
 set -euo pipefail
 
 YES=0; NO_UPDATE=0; SKIP_BRAIN=0; SKIP_AZ=0; SKIP_ACLI=0; SKIP_MIRO=0; SKIP_DOTNET=0; SKIP_INDEX=0; SKIP_LEANCTX=0
-SKIP_ATLASSIAN_MCP=0; SKIP_LOCAL_CONFIG=0
+SKIP_ATLASSIAN_MCP=0; SKIP_LOCAL_CONFIG=0; SKIP_BACKUP=0
 LEANCTX_EDIT=guard; LEANCTX_PROFILE=standard; LEANCTX_KB_REPO=""
 BRAIN_DIR="${SECOND_BRAIN_DIR:-$HOME/second-brain}"
 for a in "$@"; do case "$a" in
@@ -89,7 +91,8 @@ for a in "$@"; do case "$a" in
   --skip-leanctx) SKIP_LEANCTX=1 ;;
   --skip-atlassian-mcp) SKIP_ATLASSIAN_MCP=1 ;;
   --skip-local-config) SKIP_LOCAL_CONFIG=1 ;;
-  -h|--help) sed -n '2,72p' "$0"; exit 0 ;;
+  --skip-backup) SKIP_BACKUP=1 ;;
+  -h|--help) sed -n '2,74p' "$0"; exit 0 ;;
   *) echo "unknown arg: $a" >&2; exit 2 ;;
 esac; done
 
@@ -156,6 +159,30 @@ $MARK_END"
     printf '%s\n\n' "$block" | cat - "$f" > "$f.tmp" && mv "$f.tmp" "$f"
   else
     printf '\n%s\n' "$block" >> "$f"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Snapshot — taken BEFORE anything is written, removed or migrated.
+# Everything below is overwritten or deleted in place by later steps.
+# ---------------------------------------------------------------------------
+snapshot_config() {
+  [ "$SKIP_BACKUP" = 1 ] && return 0
+  local dir="$HOME/.claude-backups" stamp archive paths=() p
+  stamp="$(date +%Y%m%dT%H%M%S)"
+  archive="$dir/pre-install-$stamp.tar.gz"
+  mkdir -p "$dir"
+  for p in .claude.json .claude/settings.json .claude/CLAUDE.md .claude/statusline.sh \
+           .claude/skills .claude/scripts .tmux.conf .config/ctx-wire .config/claude-tools; do
+    [ -e "$HOME/$p" ] && paths+=("$p")
+  done
+  [ "${#paths[@]}" -gt 0 ] || { ok "nothing to back up yet"; return 0; }
+  if tar czf "$archive" -C "$HOME" "${paths[@]}" 2>/dev/null; then
+    ok "snapshot $archive ($(du -h "$archive" | cut -f1))"
+    say "restore with: tar xzf $archive -C \$HOME"
+  else
+    warn "snapshot failed — re-run with --skip-backup to proceed anyway"
+    return 1
   fi
 }
 
@@ -1255,6 +1282,7 @@ bold "serena-forge WSL setup — lean-ctx edition (leanctx-edit=$LEANCTX_EDIT, p
 grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null || [ -n "${WSL_DISTRO_NAME:-}" ] \
   || warn "WSL not detected — continuing anyway (plain Linux is fine)"
 
+snapshot_config
 setup_env_wiring
 load_secrets
 ensure_base_deps

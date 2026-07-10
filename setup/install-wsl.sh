@@ -139,6 +139,9 @@ export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 # dotnet-build safety-net grep matches.
 export DOTNET_CLI_UI_LANGUAGE=en
 export VSLANG=1033
+# serena-forge: disarm the legacy .cs read ASK. v0.3.0 drops the hook outright,
+# but the deployed cache lags until the plugin source ships it; 0 is a no-op then.
+export SERENA_FORGE_READ_MAXLINES=0
 # Datadog (pup CLI + dd tracers): default org is the EU site.
 export DD_SITE=datadoghq.eu
 if [ -f "\$HOME/.config/claude-tools/secrets.env" ]; then

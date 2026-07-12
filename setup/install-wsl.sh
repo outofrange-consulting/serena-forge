@@ -798,20 +798,52 @@ ensure_acli() {
 # ---------------------------------------------------------------------------
 # Azure DevOps
 # ---------------------------------------------------------------------------
+AZ_CLI_VERSION=2.88.0
+AZ_CLI_PYTHON=3.12
+
+az_path() { command -v az 2>/dev/null; }
+
+az_is_windows() {
+  local p; p=$(az_path) || return 1
+  case "$(readlink -f "$p" 2>/dev/null)" in /mnt/*) return 0 ;; *) return 1 ;; esac
+}
+
+az_is_native() {
+  az_path >/dev/null || return 1
+  az_is_windows && return 1
+  az version >/dev/null 2>&1
+}
+
+install_az_native() {
+  have uv || { warn "uv missing — cannot install a Linux az"; return 1; }
+  uv tool install "azure-cli==$AZ_CLI_VERSION" --python "$AZ_CLI_PYTHON" \
+    --with 'setuptools<81' --with pip --prerelease=allow --force >/dev/null 2>&1 || return 1
+  hash -r 2>/dev/null || true
+  az_is_native
+}
+
 ensure_az_devops() {
   [ "$SKIP_AZ" = 1 ] && return 0
   say "Azure CLI + azure-devops extension"
-  if ! have az; then
-    have pipx || { warn "pipx missing — cannot install az"; return 0; }
-    pipx install azure-cli >/dev/null 2>&1 || { warn "az install failed (pipx install azure-cli)"; return 0; }
-    pipx ensurepath >/dev/null 2>&1 || true
-    hash -r 2>/dev/null || true
-  elif [ "$NO_UPDATE" = 0 ]; then
-    pipx upgrade azure-cli >/dev/null 2>&1 || true
+  case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac
+
+  az_is_windows && warn "Windows az on PATH ($(az_path)) — it cannot run under WSL; installing a native Linux az"
+
+  if [ "$NO_UPDATE" = 1 ] && az_is_native; then
+    :
+  elif ! install_az_native; then
+    warn "az install failed (uv tool install azure-cli==$AZ_CLI_VERSION)"; return 0
   fi
-  have az || { warn "az not on PATH"; return 0; }
+
+  az_is_native || {
+    az_is_windows \
+      && warn "the Windows az still shadows the Linux one — put $HOME/.local/bin ahead of /mnt/c in PATH" \
+      || warn "no working Linux az on PATH"
+    return 0
+  }
+
   az extension add --name azure-devops --upgrade --only-show-errors >/dev/null 2>&1 || warn "azure-devops extension install failed"
-  ok "az $(az version --query '"azure-cli"' -o tsv 2>/dev/null) + azure-devops extension"
+  ok "az $(az version --query '"azure-cli"' -o tsv 2>/dev/null) + azure-devops extension (native, $(az_path))"
   if require_var AZURE_DEVOPS_ORG "Azure DevOps organization name (dev.azure.com/<org>)" plain; then
     require_var AZURE_DEVOPS_PROJECT "Default Azure DevOps project (optional, Enter to skip)" plain || true
     az devops configure --defaults "organization=https://dev.azure.com/$AZURE_DEVOPS_ORG" \

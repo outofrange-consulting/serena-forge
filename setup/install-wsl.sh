@@ -1191,6 +1191,8 @@ ensure_claude_settings() {
   mkdir -p "$HOME/.claude/scripts"
   install -m 0755 "$ROOT/setup/scripts/no-comments-check.sh" "$HOME/.claude/scripts/no-comments-check.sh"
   ok "~/.claude/scripts/no-comments-check.sh"
+  install -m 0755 "$ROOT/setup/scripts/crlf-normalize.sh" "$HOME/.claude/scripts/crlf-normalize.sh"
+  ok "~/.claude/scripts/crlf-normalize.sh"
 
   ensure_clepsydre || return 0
 
@@ -1202,12 +1204,12 @@ ensure_claude_settings() {
   managed="$(mktemp)"
   cat > "$managed" <<'JSON'
 {
-  "matcher": "Edit|Write|MultiEdit|mcp__plugin_serena-forge_serena__(replace_symbol_body|insert_after_symbol|insert_before_symbol|replace_in_files|replace_content|create_text_file|rename_symbol|safe_delete_symbol)",
+  "matcher": "Edit|Write|MultiEdit|mcp__plugin_serena-forge_serena__(replace_symbol_body|insert_after_symbol|insert_before_symbol|replace_in_files|replace_content|create_text_file|rename_symbol|safe_delete_symbol)|mcp__lean-ctx__(ctx_patch|ctx_edit|ctx_fill)",
   "hooks": [
     {
       "type": "command",
-      "statusMessage": "Normalizing line endings to CRLF",
-      "command": "f=$(jq -r '.tool_input.file_path // .tool_input.relative_path // empty'); [ -n \"$f\" ] && [ -f \"$f\" ] && case \"$f\" in *.cs|*.csproj|*.props|*.targets|*.json|*.editorconfig|*.md|*.yml|*.yaml) perl -i -pe 's/\\r?\\n/\\r\\n/' \"$f\";; esac 2>/dev/null || true # serena-forge managed"
+      "statusMessage": "Normalizing line endings to CRLF (editorconfig-aware)",
+      "command": "bash \"$HOME/.claude/scripts/crlf-normalize.sh\" # serena-forge managed"
     },
     {
       "type": "command",

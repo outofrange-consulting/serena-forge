@@ -16,7 +16,8 @@ model=$(printf '%s' "$in" | node -e '
   process.stdout.write(icon+ver+(win?" ("+win+")":""));
 ' 2>/dev/null)
 
-gauge=$(printf '%s' "$in" | node "{{CLEPSYDRE}}" 2>/dev/null \
+# No TTY here, so clepsydre would see no COLUMNS and fall back to its narrowest caps.
+gauge=$(printf '%s' "$in" | COLUMNS="${COLUMNS:-120}" node "{{CLEPSYDRE}}" 2>/dev/null \
   | sed -e 's/ · /·/g' -e 's/  */ /g')
 # clepsydre renders its own "[model]" prefix; ours replaces it.
 [ -n "$model" ] && gauge=$(printf '%s' "$gauge" | sed -E 's/^\[[^]]*\] ?//')

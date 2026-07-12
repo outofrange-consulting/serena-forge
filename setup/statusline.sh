@@ -22,7 +22,9 @@ model=$(printf '%s' "$in" | node -e '
 gauge=$(printf '%s' "$in" \
   | COLUMNS="${COLUMNS:-140}" CLEPSYDRE_WIDTH_RESERVE="${CLEPSYDRE_WIDTH_RESERVE:-26}" \
     node "{{CLEPSYDRE}}" 2>/dev/null \
-  | sed -e 's/ · /·/g' -e 's/  */ /g')
+  | sed -e 's/ · /·/g' -e 's/  */ /g' \
+        -e 's/MEMORY\.md/Memory/' \
+        -e 's|·mem [0-9.]*[BKMG]*/[0-9]*f||')
 # clepsydre renders its own "[model]" prefix; ours replaces it.
 [ -n "$model" ] && gauge=$(printf '%s' "$gauge" | sed -E 's/^\[[^]]*\] ?//')
 

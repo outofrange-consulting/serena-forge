@@ -63,6 +63,28 @@ to you**, **estimated with story points** (estimate it first — see below), and
 tagged with the fix version **`Client - Next release`**. The Sprint is **not**
 set — leave it unset (the ticket lands in the backlog).
 
+### NEVER run `acli jira workitem create` directly — use the wrapper
+
+`create` is **not idempotent and cannot be undone**: LOT denies delete permission,
+so a duplicate ticket can only be transitioned to `Annulé`, never removed. And
+`acli … create --json` prints a large payload whose `"key"` is **not** near the
+tail — pipe it through `tail`/`head` and you lose the key. Re-running `create` to
+recover it silently creates a **second ticket**. This has bitten us more than once.
+
+Always go through **`~/.claude/scripts/jira-create.sh <json-file> [acli args…]`**.
+It prints **only** the resulting key (safe to pipe), or fails loudly with the full
+payload, and it refuses to create a second ticket with the same summary.
+
+It dedupes against a **local ledger** (`~/.claude/state/jira-created.tsv`), not just
+a Jira search, because **Jira's search index is asynchronous**: a ticket created
+seconds ago is not yet findable by JQL — which is exactly the window in which the
+duplicate gets created. A search-based guard alone silently fails right when you
+need it (verified: it created a duplicate on an immediate re-run).
+
+If it ever prints *"created, but could NOT parse the key"*: the ticket **exists**.
+Find it with `acli jira workitem search --jql 'project = LOT ORDER BY created DESC'`
+— **do not re-run create**.
+
 `acli jira workitem create` takes the full definition from a JSON file via
 `--from-json`; custom fields go under `additionalAttributes`. Write the file,
 then create:
@@ -86,10 +108,13 @@ cat > /tmp/wi.json <<'JSON'
   }
 }
 JSON
-acli jira workitem create --from-json /tmp/wi.json --parent "LCT-46421" --json
+~/.claude/scripts/jira-create.sh /tmp/wi.json --parent "LCT-46421"
 ```
 
-- `type` is **case-sensitive**: `Story` (feat) | `Bug` (fix) | `Task` (other).
+- `type` is **case-sensitive**: `Story` (feat) | `Bug` (fix) | `Tâche` (other).
+  **On LOT the "task" type is the French `Tâche`** — plain `Task` is rejected
+  ("Please provide valid issue type"). Allowed LOT types: `Story, Tâche, Bug,
+  Sous-tâche, Epic, Initiative, …`.
 - `assignee` = your account id `712020:c8fbc26b-004f-4908-be22-1a34af79e66f`
   (Geoffrey MARC); `@me` also works but the id is unambiguous.
 - `customfield_10001` (**Team**) is a **plain-string id** — an object `{id:…}` is
@@ -124,7 +149,7 @@ cat > /tmp/wi.json <<'JSON'
   }
 }
 JSON
-acli jira workitem create --from-json /tmp/wi.json --json
+~/.claude/scripts/jira-create.sh /tmp/wi.json
 ```
 Caveats: a **Bug** on LOT needs the same two extra fields as LCT (Detection Envs
 + Severity — see below). `acli jira workitem view/search` **strips all
@@ -169,6 +194,16 @@ project requires an id), look up the `LCT` project versions and pass
 `{"id": "<versionId>"}` instead, or set it right after creation with
 `acli jira workitem edit --key <new key> --from-json` (an `additionalAttributes`
 with just `fixVersions`).
+
+### Sprint — only when the user asks for one
+By default leave the Sprint unset (the ticket lands in the backlog). When the user
+names a sprint, resolve its id and add the ticket after creation:
+```bash
+acli jira board list-sprints --id 28 --state active,future --json   # board 28 = Enabler P&O SCRUM (LOT)
+```
+Sprint names carry a PI prefix — "P&O Sprint 2" is really `PI#19 P&O Sprint 2`, so
+**match on the suffix, not the exact name**. Then add it with the Atlassian MCP tool
+`jira_add_issues_to_sprint(sprint_id, issue_keys)` (`acli` has no add-to-sprint verb).
 
 ### Assignee
 Always assign the new ticket to **yourself** — never leave it unassigned. Account

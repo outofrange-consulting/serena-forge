@@ -1225,6 +1225,8 @@ ensure_claude_settings() {
   ok "~/.claude/scripts/no-comments-check.sh"
   install -m 0755 "$ROOT/setup/scripts/crlf-normalize.sh" "$HOME/.claude/scripts/crlf-normalize.sh"
   ok "~/.claude/scripts/crlf-normalize.sh"
+  install -m 0755 "$ROOT/setup/scripts/jira-create.sh" "$HOME/.claude/scripts/jira-create.sh"
+  ok "~/.claude/scripts/jira-create.sh"
 
   ensure_clepsydre || return 0
 

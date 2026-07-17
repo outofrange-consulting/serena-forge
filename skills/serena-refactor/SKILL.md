@@ -1,13 +1,13 @@
 ---
 name: serena-refactor
-description: Edit and refactor C# symbols through Serena's LSP-backed symbolic write tools instead of raw text edits. Use for renaming a symbol, moving a class, replacing or inserting a method, or any structural change to a .cs file — because Edit/Write/MultiEdit on hand-authored .cs are consent-gated plugin-wide and should be redirected to Serena.
+description: Edit and refactor C# symbols through Serena's LSP-backed symbolic write tools instead of raw text edits. Use for renaming a symbol, moving a class, replacing or inserting a method, or any structural change to a .cs file — because Edit/Write/MultiEdit on .cs are denied plugin-wide and must be redirected to Serena.
 when_to_use: "Trigger on: \"rename this symbol\", \"refactor\", \"edit this method\", \"move this class\", \"change this method's body\", \"add a method to this class\", \"delete this symbol\", or any request that modifies C# code. Also use whenever a native Edit/Write/MultiEdit on a .cs file was just denied — this is the sanctioned path."
 allowed-tools: "Bash(git diff*) Bash(git status*) Read"
 ---
 
 # serena-refactor — symbolic C# editing
 
-Native `Edit`, `Write`, and `MultiEdit` on `.cs` files are **protected globally** by serena-forge (write-only enforcement, active in every repo). By default, C# code changes should go through **Serena's symbolic write tools**, which edit by *symbol* (class / method / property) via the Roslyn LSP rather than by line-matching text. This keeps edits surgical and keeps Serena's index consistent.
+Native `Edit`, `Write`, and `MultiEdit` on `.cs` files are **denied globally** by serena-forge (write-only enforcement, active in every repo). All C# code changes go through **Serena's symbolic/file write tools**, which edit by *symbol* (class / method / property) via the Roslyn LSP rather than by line-matching text. This keeps edits surgical and keeps Serena's index consistent.
 
 ## Workflow: locate → edit → verify
 
@@ -89,4 +89,4 @@ If Serena can't perform the change — the Roslyn LSP hasn't finished initializi
 Instead:
 
 1. If it looks like a warm-up delay, wait for the LSP to finish initializing and retry the symbolic edit once.
-2. Otherwise, **stop and tell the user** exactly what failed (LSP unavailable / timed out / .NET 9 / change not expressible symbolically) and ask them to either fix Serena or disable the serena-forge hook. Do not silently fall back to native `Edit`/`Write`; ask the user for an explicit one-off override if they want to proceed without Serena.
+2. Otherwise, **stop and tell the user** exactly what failed (LSP unavailable / timed out / .NET 9 / change not expressible symbolically) and ask them to either fix Serena or disable the serena-forge hook. Do not fall back to native `Edit`/`Write`; the safety hook intentionally denies that path.

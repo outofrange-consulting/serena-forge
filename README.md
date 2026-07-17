@@ -1,6 +1,6 @@
 # serena-forge
 
-A Claude Code plugin that **forces symbolic C# editing through [Serena](https://github.com/oraios/serena)** and adds a **granular destructive-command guard**. It bundles the Serena MCP server, consent-gates freehand `.cs` writes so refactors are steered through Serena's Roslyn-aware symbol tools, and asks/denies on the specific destructive shell commands that hurt on a brownfield .NET solution.
+A Claude Code plugin that **forces symbolic C# editing through [Serena](https://github.com/oraios/serena)** and adds a **granular destructive-command guard**. It bundles the Serena MCP server, blocks freehand `.cs` writes so refactors are steered through Serena's Roslyn-aware symbol tools, and asks/denies on the specific destructive shell commands that hurt on a brownfield .NET solution.
 
 Built for large, brownfield **.NET 10** codebases where "edit the right symbol" beats "rewrite the file", and where an accidental `git reset --hard` or `dotnet ef database drop` is expensive.
 
@@ -10,8 +10,8 @@ Built for large, brownfield **.NET 10** codebases where "edit the right symbol" 
 
 | Capability | Mechanism |
 | --- | --- |
-| **Symbolic write/refactor** | `Edit`/`Write`/`MultiEdit` on hand-written `*.cs` **ASK for user consent** and redirect to Serena's symbol tools (`replace_symbol_body`, `insert_after_symbol`, `rename_symbol`, `safe_delete_symbol`, …). |
-| **Serena-first reading** | Native `Read` on `*.cs` stays **ALLOWED**, but a `SessionStart` hook pushes a navigation protocol (`get_symbols_overview` → `find_symbol` → `include_body` only on the target; `find_referencing_symbols` over grep), and a whole-file `Read` of a `.cs` file over ~100 lines gets a one-click **ASK** steering to the symbolic path. |
+| **Symbolic write/refactor** | `Edit`/`Write`/`MultiEdit` on `*.cs` are **DENIED** and redirected to Serena's symbol tools (`replace_symbol_body`, `insert_after_symbol`, `rename_symbol`, `safe_delete_symbol`, …). |
+| **Serena-first reading** | Native `Read` on `*.cs` stays **ALLOWED** and is not hook-prompted. A `SessionStart` context nudge tells onboarded Serena repos to prefer `get_symbols_overview` → `find_symbol` → `include_body` only on the target, and `find_referencing_symbols` over grep, without interrupting reconnaissance/exploration agents. |
 | **Build safety net** | After every Serena symbolic edit, the touched `.csproj` is queued and compiled once with `dotnet build` at end of turn (`Stop` hook). A failed build **blocks the turn** and hands the compiler errors back to the agent to fix. This is the real guard-rail — not a graph. |
 | **Granular destructive guard** | A Python `PreToolUse Bash` hook **DENYs catastrophic commands**, **ASKs for recoverable destructive commands**, and allows provably low-risk temp/generated cleanup (see below) instead of the coarse WARN-only default. |
 | **Onboard on demand** | serena-forge is global, so it lands in un-onboarded repos. When C# work is requested where there's no `.serena/`, the agent is steered to **propose onboarding** (`/serena-forge-setup`) to the user and run it on agreement — never to route around the block. |
@@ -19,7 +19,7 @@ Built for large, brownfield **.NET 10** codebases where "edit the right symbol" 
 
 ### Write-only enforcement, not read-blocking
 
-Reading `.cs` with the native `Read` tool is deliberately left open — blocking reads would cripple the agent and provoke workarounds. What's enforced is the **write path preference**: hand-authored C# mutations ask for explicit consent before using native edits, steering the normal path through Serena so edits are symbol-scoped and Roslyn-validated rather than blind text replaces. The `SessionStart` navigation nudge handles the read side by preference, not by force.
+Reading `.cs` with the native `Read` tool is deliberately left open — blocking reads would cripple the agent and provoke workarounds. What's enforced is the **write path preference**: C# mutations through native edit tools are denied as a safety backstop, steering the normal path through Serena so edits are symbol-scoped and Roslyn-validated rather than blind text replaces. The `SessionStart` navigation nudge handles the read side by preference, not by force.
 
 ### Destructive commands guarded (ASK / DENY)
 
@@ -43,7 +43,7 @@ Reading `.cs` with the native `Read` tool is deliberately left open — blocking
 
 ### 1. Write-only enforcement
 
-**Decision:** ask for explicit consent on `Edit`/`Write`/`MultiEdit` for hand-authored `.cs`; leave `Read` allowed; exempt generated C# artifacts by default.
+**Decision:** deny `Edit`/`Write`/`MultiEdit` on `.cs`; leave `Read` allowed and unprompted; rely on session guidance rather than a read hook for Serena-first navigation.
 
 **Why:** the goal is **discipline plus navigation**, not a sandbox. Forcing writes through Serena means every change is a scoped symbolic operation on a Roslyn-parsed tree — you rename a method and its references move, you replace a body without disturbing the file around it. Blocking reads too would only teach the agent to route around the guard; a `SessionStart` protocol that *prefers* symbolic reads gets the navigation benefit without the friction.
 
@@ -51,7 +51,7 @@ Reading `.cs` with the native `Read` tool is deliberately left open — blocking
 
 **Decision:** the `.cs` write protection is **active in every repo** the moment the plugin is enabled — not gated on the presence of a `.serena/` folder or any per-repo opt-in. There is **no built-in escape hatch** (no marker file, no env toggle).
 
-**Why:** brownfield .NET work spans many repos and worktrees; a per-repo gate means the discipline silently lapses wherever setup was skipped — exactly the repos that need it most. Global-on makes the safe path the default. And a documented bypass is a bypass the agent will reach for under pressure — so when Serena genuinely can't make an edit, the plugin tells the agent to **stop and ask the user** to fix Serena or disable the hook, rather than working around the block. Overrides are human decisions: consent to a single native edit, disable the plugin, or remove the hook; the agent must not silently route around the policy.
+**Why:** brownfield .NET work spans many repos and worktrees; a per-repo gate means the discipline silently lapses wherever setup was skipped — exactly the repos that need it most. Global-on makes the safe path the default. And a documented bypass is a bypass the agent will reach for under pressure — so when Serena genuinely can't make an edit, the plugin tells the agent to **stop and ask the user** to fix Serena or disable the hook, rather than working around the block. Enforcement is only turned off by a human (disable the plugin, or remove the hook), never by the agent mid-task.
 
 ---
 
@@ -80,7 +80,7 @@ Verified on this box: `uvx` present, `dotnet 10.0.301`, Ubuntu 24.04 / WSL2.
 
 2. **Onboard the current repo.** Run **`/serena-forge-setup`** in the target repository. It activates the project for Serena (`activate_project`), runs Serena onboarding, and **refuses / warns on .NET 9** projects before you hit the LSP timeout. Because the plugin is global, the project isn't hardcoded in the server config — the setup skill activates whichever repo you're in.
 
-3. **Work.** Use `/serena-navigate` to explore symbols and `/serena-refactor` to make symbolic edits. `.cs` writes via the native tools will ask for user consent with a message pointing you at Serena.
+3. **Work.** Use `/serena-navigate` to explore symbols and `/serena-refactor` to make symbolic edits. `.cs` writes via native tools will be denied with a message pointing you at Serena.
 
 ### Optional: pin the read discipline in `CLAUDE.md`
 
@@ -102,16 +102,17 @@ The `SessionStart` banner injects the Serena-first workflow every session, but a
 | Var | Default | Effect |
 | --- | --- | --- |
 | `SERENA_FORGE_BUILD` | `1` | `0` disables the end-of-turn `dotnet build` safety net. |
-| `SERENA_FORGE_READ_MAXLINES` | `100` | Line threshold above which a whole-file `.cs` `Read` prompts for confirmation; `0` disables the read nudge. |
+| `SERENA_FORGE_BUILD_ON_FAIL` | `block` | `warn` reports build failures without blocking the Stop hook (useful for TDD/Superpowers red phase); `block` forces strict mode. |
+| `SERENA_FORGE_TDD` | `0` | `1` enables report-only build failures for TDD red/green workflows. |
 
 ---
 
 ## When Serena can't make an edit
 
-There is **no bypass** to reach for — that is deliberate (see Design decision #2). If Serena's LSP isn't ready or a change can't be made symbolically, the hooks ask for deliberate human consent and the skills tell the agent to:
+There is **no bypass** to reach for — that is deliberate (see Design decision #2). If Serena's LSP isn't ready or a change can't be made symbolically, the hooks and skills tell the agent to:
 
 1. Wait out the normal ~30 s cold-init and retry once if it looks like a warm-up delay (see Pitfalls).
-2. Otherwise **stop and ask you** — reporting the specific cause (LSP unavailable / timed out / `.NET 9` / change not expressible symbolically) — so you can either fix Serena, consent to the one native edit, or disable the hook. The agent never silently falls back to native `.cs` edits.
+2. Otherwise **stop and ask you** — reporting the specific cause (LSP unavailable / timed out / `.NET 9` / change not expressible symbolically) — so you can either fix Serena or disable the hook. The agent never falls back to native `.cs` edits.
 
 To turn enforcement off yourself, disable the plugin (or remove the `enforce_serena_write.py` hook entry). That is a human action, not something the agent does on its own.
 
@@ -123,8 +124,7 @@ To turn enforcement off yourself, disable the plugin (or remove the `enforce_ser
 
 | Hook | Event / matcher | What it does |
 | --- | --- | --- |
-| `hooks/enforce_serena_write.py` | `PreToolUse` · `Edit\|Write\|MultiEdit` | ASK before native writes to hand-authored `*.cs`; message redirects to Serena symbol tools. Generated C# artifacts are exempt by default (and, on an un-onboarded repo, tells the agent to propose `/serena-forge-setup`). Non-`.cs` writes pass through. |
-| `hooks/prefer_symbolic_read.py` | `PreToolUse` · `Read` | ASK (one-click) on a whole-file `Read` of a `.cs` file over ~100 lines, steering to `get_symbols_overview` / `find_symbol`. Bounded reads (`limit` set) and small files pass through. Threshold: `SERENA_FORGE_READ_MAXLINES` (0 disables). |
+| `hooks/enforce_serena_write.py` | `PreToolUse` · `Edit\|Write\|MultiEdit` | DENY native writes to `*.cs`; message redirects to Serena symbol/file edit tools and, on an un-onboarded repo, tells the agent to propose `/serena-forge-setup`. Non-`.cs` writes pass through. |
 | `hooks/protect_commands.py` | `PreToolUse` · `Bash` | ASK/DENY on the destructive command set above. |
 | `hooks/queue_build.py` | `PostToolUse` · Serena write tools | Cheap: resolves the nearest `.csproj` after symbol edits and Serena file edits (`create_text_file`, `replace_lines`, `insert_at_line`, `delete_lines`, `replace_content`, `replace_in_files`) and appends it to a per-repo temp build queue. No build here. |
 | `hooks/flush_build_queue.py` | `Stop` | Drains the queue and runs one scoped `dotnet build --no-restore` per touched project. On failure, blocks by default, but reports-only in TDD/Superpowers mode (`SERENA_FORGE_TDD=1`, `SERENA_FORGE_BUILD_ON_FAIL=warn`, `SUPERPOWERS*`, `.superpowers/`, or `superpowers.md`). Opt out with `SERENA_FORGE_BUILD=0`. |
@@ -231,10 +231,7 @@ The active hook entrypoints in `hooks/hooks.json` call Python scripts directly. 
 
 The relaxed-but-safe defaults are:
 
-- native edits to hand-authored `.cs` ask for explicit consent and still steer
-  agents to Serena first; generated C# artifacts (`*.g.cs`, `*.Designer.cs`,
-  `*.AssemblyInfo.cs`, `obj/`, `bin/`, generated folders) are not guarded by the
-  native-write hook unless `SERENA_FORGE_GUARD_GENERATED=1`;
+- native edits to `.cs` are denied as a safety backstop and steer agents to Serena file/symbol edit tools;
 - `rm` under `/tmp` / `$TMPDIR`, build-output folders, caches, and generated
   artifacts is allowed silently;
 - catastrophic deletes such as recursive forced removal of `/`, `~`, `$HOME`, or

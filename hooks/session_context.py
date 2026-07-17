@@ -19,9 +19,9 @@ def main() -> int:
 
 Serena provides symbol-level read and edit tools for the CURRENT repository, backed by the Roslyn language server.
 
-Read policy: native Read of .cs files is allowed, but prefer Serena for navigation: get_symbols_overview, then find_symbol with include_body: true only for the target. Use find_referencing_symbols instead of grep for impact analysis.
+Read policy: native Read of .cs files is allowed and is never prompt-gated by serena-forge. In Serena-onboarded repos, prefer Serena for navigation before reading large C# files: get_symbols_overview, then find_symbol with include_body: true only for the target. Use find_referencing_symbols instead of grep for impact analysis. Recon/exploration agents may read files when that is the right tool; do not repeatedly ask the user just to inspect code.
 
-Write policy: native .cs edits are protected and ask for human consent. Prefer Serena symbolic edits: replace_symbol_body, insert_after_symbol, insert_before_symbol, rename_symbol, safe_delete_symbol, and create_text_file. Confirm native edits only as a deliberate human-approved exception.
+Write policy: native .cs edits are denied as a safety backstop. Use Serena symbolic/file edits first: replace_symbol_body, insert_after_symbol, insert_before_symbol, rename_symbol, safe_delete_symbol, create_text_file, replace_lines, insert_at_line, delete_lines, replace_content, or replace_in_files. If Serena cannot perform the change, stop and ask the user to fix Serena or disable the hook; do not bypass it silently.
 
 Build safety net: after C# edits, serena-forge compiles touched project(s) with dotnet build at end of turn. Treat a red build as unfinished work.
 

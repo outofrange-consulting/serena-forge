@@ -11,15 +11,6 @@
         ]
       },
       {
-        "matcher": "Read",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"${PYTHON:-python3}\" \"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-.}}/hooks/prefer_symbolic_read.py\""
-          }
-        ]
-      },
-      {
         "matcher": "Bash",
         "hooks": [
           {

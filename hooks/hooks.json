@@ -6,16 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/enforce-serena-write.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "Read",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/prefer-symbolic-read.sh"
+            "command": "\"${PYTHON:-python3}\" \"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-.}}/hooks/enforce_serena_write.py\""
           }
         ]
       },
@@ -24,18 +15,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/protect-commands.sh"
+            "command": "\"${PYTHON:-python3}\" \"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-.}}/hooks/protect_commands.py\""
           }
         ]
       }
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__serena__replace_symbol_body|mcp__serena__insert_after_symbol|mcp__serena__insert_before_symbol|mcp__serena__rename_symbol|mcp__serena__safe_delete_symbol|mcp__serena__replace_content|mcp__serena__replace_in_files",
+        "matcher": "mcp__serena__replace_symbol_body|mcp__serena__insert_after_symbol|mcp__serena__insert_before_symbol|mcp__serena__rename_symbol|mcp__serena__safe_delete_symbol|mcp__serena__replace_content|mcp__serena__replace_in_files|mcp__serena__create_text_file|mcp__serena__replace_lines|mcp__serena__insert_at_line|mcp__serena__delete_lines",
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/queue-build.sh"
+            "command": "\"${PYTHON:-python3}\" \"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-.}}/hooks/queue_build.py\""
           }
         ]
       }
@@ -45,7 +36,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/flush-build-queue.sh"
+            "command": "\"${PYTHON:-python3}\" \"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-.}}/hooks/flush_build_queue.py\""
           }
         ]
       }
@@ -55,7 +46,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/session-context.sh"
+            "command": "\"${PYTHON:-python3}\" \"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-.}}/hooks/session_context.py\""
           }
         ]
       }

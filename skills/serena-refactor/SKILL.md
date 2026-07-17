@@ -1,13 +1,13 @@
 ---
 name: serena-refactor
-description: Edit and refactor C# symbols through Serena's LSP-backed symbolic write tools instead of raw text edits. Use for renaming a symbol, moving a class, replacing or inserting a method, or any structural change to a .cs file — because Edit/Write/MultiEdit on .cs are blocked plugin-wide and must be redirected to Serena.
+description: Edit and refactor C# symbols through Serena's LSP-backed symbolic write tools instead of raw text edits. Use for renaming a symbol, moving a class, replacing or inserting a method, or any structural change to a .cs file — because Edit/Write/MultiEdit on .cs are denied plugin-wide and must be redirected to Serena.
 when_to_use: "Trigger on: \"rename this symbol\", \"refactor\", \"edit this method\", \"move this class\", \"change this method's body\", \"add a method to this class\", \"delete this symbol\", or any request that modifies C# code. Also use whenever a native Edit/Write/MultiEdit on a .cs file was just denied — this is the sanctioned path."
 allowed-tools: "Bash(git diff*) Bash(git status*) Read"
 ---
 
 # serena-refactor — symbolic C# editing
 
-Native `Edit`, `Write`, and `MultiEdit` on `.cs` files are **denied globally** by serena-forge (write-only enforcement, active in every repo). All C# code changes go through **Serena's symbolic write tools**, which edit by *symbol* (class / method / property) via the Roslyn LSP rather than by line-matching text. This keeps edits surgical and keeps Serena's index consistent.
+Native `Edit`, `Write`, and `MultiEdit` on `.cs` files are **denied globally** by serena-forge (write-only enforcement, active in every repo). All C# code changes go through **Serena's symbolic/file write tools**, which edit by *symbol* (class / method / property) via the Roslyn LSP rather than by line-matching text. This keeps edits surgical and keeps Serena's index consistent.
 
 ## Workflow: locate → edit → verify
 
@@ -18,7 +18,7 @@ Native `Edit`, `Write`, and `MultiEdit` on `.cs` files are **denied globally** b
 2. **Edit** with the matching write tool (below).
 3. **Verify** with `get_diagnostics_for_symbol` (or `get_diagnostics_for_file`) to confirm the edit compiles with no new errors — then **check the git diff** (see the CRLF pitfall — this step is not optional when `.editorconfig` enforces CRLF).
 
-> **Build safety net (automatic).** serena-forge queues the touched `.csproj` on every symbolic edit and runs one scoped `dotnet build --no-restore` at end of turn (`queue-build.sh` → `flush-build-queue.sh`, Stop hook). If it fails, the turn is blocked and the compiler errors are handed back to you — **fix them through Serena before finishing; a red build is unfinished work.** `get_diagnostics_*` is your fast in-loop check; the end-of-turn build is the real gate. For a wider guarantee, follow the build with the targeted tests of the modified slice (in VSA the per-slice test scope keeps this cheap). Opt out with `SERENA_FORGE_BUILD=0` only if the user asks.
+> **Build safety net (automatic).** serena-forge queues the touched `.csproj` on every symbolic edit and runs one scoped `dotnet build --no-restore` at end of turn (`queue_build.py` → `flush_build_queue.py`, Stop hook). If it fails, the turn is blocked and the compiler errors are handed back to you — **fix them through Serena before finishing; a red build is unfinished work.** `get_diagnostics_*` is your fast in-loop check; the end-of-turn build is the real gate. For a wider guarantee, follow the build with the targeted tests of the modified slice (in VSA the per-slice test scope keeps this cheap). Opt out with `SERENA_FORGE_BUILD=0` only if the user asks. In TDD/Superpowers flows, use `SERENA_FORGE_TDD=1` or `SERENA_FORGE_BUILD_ON_FAIL=warn` so the red phase is reported without blocking the turn.
 
 ## Verified Serena write tools
 
@@ -89,4 +89,4 @@ If Serena can't perform the change — the Roslyn LSP hasn't finished initializi
 Instead:
 
 1. If it looks like a warm-up delay, wait for the LSP to finish initializing and retry the symbolic edit once.
-2. Otherwise, **stop and tell the user** exactly what failed (LSP unavailable / timed out / .NET 9 / change not expressible symbolically) and ask them to either fix Serena or disable the serena-forge hook. Do not fall back to native `Edit`/`Write` — the block is intentional.
+2. Otherwise, **stop and tell the user** exactly what failed (LSP unavailable / timed out / .NET 9 / change not expressible symbolically) and ask them to either fix Serena or disable the serena-forge hook. Do not fall back to native `Edit`/`Write`; the safety hook intentionally denies that path.

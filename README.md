@@ -1,6 +1,6 @@
 # serena-forge
 
-A Claude Code plugin that **forces symbolic C# editing through [Serena](https://github.com/oraios/serena)** and adds a **granular destructive-command guard**. It bundles the Serena MCP server, blocks freehand `.cs` writes so refactors go through Serena's Roslyn-aware symbol tools, and asks/denies on the specific destructive shell commands that hurt on a brownfield .NET solution.
+A Claude Code plugin that **forces symbolic C# editing through [Serena](https://github.com/oraios/serena)** and adds a **granular destructive-command guard**. It bundles the Serena MCP server, blocks freehand `.cs` writes so refactors are steered through Serena's Roslyn-aware symbol tools, and asks/denies on the specific destructive shell commands that hurt on a brownfield .NET solution.
 
 Built for large, brownfield **.NET 10** codebases where "edit the right symbol" beats "rewrite the file", and where an accidental `git reset --hard` or `dotnet ef database drop` is expensive.
 
@@ -11,15 +11,15 @@ Built for large, brownfield **.NET 10** codebases where "edit the right symbol" 
 | Capability | Mechanism |
 | --- | --- |
 | **Symbolic write/refactor** | `Edit`/`Write`/`MultiEdit` on `*.cs` are **DENIED** and redirected to Serena's symbol tools (`replace_symbol_body`, `insert_after_symbol`, `rename_symbol`, `safe_delete_symbol`, …). |
-| **Serena-first reading** | Native `Read` on `*.cs` stays **ALLOWED**, but a `SessionStart` hook pushes a navigation protocol (`get_symbols_overview` → `find_symbol` → `include_body` only on the target; `find_referencing_symbols` over grep), and a whole-file `Read` of a `.cs` file over ~100 lines gets a one-click **ASK** steering to the symbolic path. |
+| **Serena-first reading** | Native `Read` on `*.cs` stays **ALLOWED** and is not hook-prompted. A `SessionStart` context nudge tells onboarded Serena repos to prefer `get_symbols_overview` → `find_symbol` → `include_body` only on the target, and `find_referencing_symbols` over grep, without interrupting reconnaissance/exploration agents. |
 | **Build safety net** | After every Serena symbolic edit, the touched `.csproj` is queued and compiled once with `dotnet build` at end of turn (`Stop` hook). A failed build **blocks the turn** and hands the compiler errors back to the agent to fix. This is the real guard-rail — not a graph. |
-| **Granular destructive guard** | A `PreToolUse Bash` hook **ASKs/DENYs** on a precise set of destructive commands (see below) instead of the coarse WARN-only default. |
+| **Granular destructive guard** | A Python `PreToolUse Bash` hook **DENYs catastrophic commands**, **ASKs for recoverable destructive commands**, and allows provably low-risk temp/generated cleanup (see below) instead of the coarse WARN-only default. |
 | **Onboard on demand** | serena-forge is global, so it lands in un-onboarded repos. When C# work is requested where there's no `.serena/`, the agent is steered to **propose onboarding** (`/serena-forge-setup`) to the user and run it on agreement — never to route around the block. |
 | **Bundled Serena MCP server** | The plugin ships the Serena MCP server config; enabling the plugin starts it. No separate `claude mcp add`. |
 
 ### Write-only enforcement, not read-blocking
 
-Reading `.cs` with the native `Read` tool is deliberately left open — blocking reads would cripple the agent and provoke workarounds. What's enforced is the **write path**: every mutation of C# goes through Serena so edits are symbol-scoped and Roslyn-validated, never a blind text replace. The `SessionStart` navigation nudge handles the read side by preference, not by force.
+Reading `.cs` with the native `Read` tool is deliberately left open — blocking reads would cripple the agent and provoke workarounds. What's enforced is the **write path preference**: C# mutations through native edit tools are denied as a safety backstop, steering the normal path through Serena so edits are symbol-scoped and Roslyn-validated rather than blind text replaces. The `SessionStart` navigation nudge handles the read side by preference, not by force.
 
 ### Destructive commands guarded (ASK / DENY)
 
@@ -31,7 +31,7 @@ Reading `.cs` with the native `Read` tool is deliberately left open — blocking
 > **Coexistence with `dev-team`'s `destructive-guard.sh` (design decision: keep both, accept the duplicate line).**
 > On a Bash call, both hooks fire on the same `rm` / `git` / SQL categories. They speak *different* protocols and do **not** contradict:
 > - `destructive-guard.sh` uses the legacy protocol — by default it prints a `CAUTION: …` line and exits `0` (a warning, it does **not** block). It only hard-blocks (`exit 2`) when `/careful` mode is active.
-> - `protect-commands.sh` uses the modern protocol — it exits `0` with a `permissionDecision` of `ask`/`deny` in JSON. On the ALLOW majority it stays silent (never emits `"allow"`, so it never overrides other guards).
+> - `protect_commands.py` uses the modern protocol — it exits `0` with a `permissionDecision` of `ask`/`deny` in JSON. On the ALLOW majority it stays silent (never emits `"allow"`, so it never overrides other guards).
 >
 > Claude Code aggregates the guards and the strictest verdict wins (`deny` > `ask` > warn/allow), so the **effective** decision is always serena-forge's `ask`/`deny`. The cost is purely cosmetic: you'll see dev-team's `CAUTION:` line *in addition to* the serena-forge prompt. **This duplicate is expected and left in place on purpose** — we do not unwire `destructive-guard.sh` because it carries the `/careful` hard-block (`exit 2`) that serena-forge does not replicate, and it lives in the auto-updating plugin cache (any unwiring would be reverted on the next `dev-team` upgrade). Even under `/careful`, there is no conflict: serena-forge never emits `"allow"`, so dev-team's `exit 2` block still dominates.
 >
@@ -43,13 +43,13 @@ Reading `.cs` with the native `Read` tool is deliberately left open — blocking
 
 ### 1. Write-only enforcement
 
-**Decision:** deny `Edit`/`Write`/`MultiEdit` on `.cs`; leave `Read` allowed.
+**Decision:** deny `Edit`/`Write`/`MultiEdit` on `.cs`; leave `Read` allowed and unprompted; rely on session guidance rather than a read hook for Serena-first navigation.
 
 **Why:** the goal is **discipline plus navigation**, not a sandbox. Forcing writes through Serena means every change is a scoped symbolic operation on a Roslyn-parsed tree — you rename a method and its references move, you replace a body without disturbing the file around it. Blocking reads too would only teach the agent to route around the guard; a `SessionStart` protocol that *prefers* symbolic reads gets the navigation benefit without the friction.
 
 ### 2. Global scope, no bypass
 
-**Decision:** the `.cs` write block is **active in every repo** the moment the plugin is enabled — not gated on the presence of a `.serena/` folder or any per-repo opt-in. There is **no built-in escape hatch** (no marker file, no env toggle).
+**Decision:** the `.cs` write protection is **active in every repo** the moment the plugin is enabled — not gated on the presence of a `.serena/` folder or any per-repo opt-in. There is **no built-in escape hatch** (no marker file, no env toggle).
 
 **Why:** brownfield .NET work spans many repos and worktrees; a per-repo gate means the discipline silently lapses wherever setup was skipped — exactly the repos that need it most. Global-on makes the safe path the default. And a documented bypass is a bypass the agent will reach for under pressure — so when Serena genuinely can't make an edit, the plugin tells the agent to **stop and ask the user** to fix Serena or disable the hook, rather than working around the block. Enforcement is only turned off by a human (disable the plugin, or remove the hook), never by the agent mid-task.
 
@@ -80,7 +80,7 @@ Verified on this box: `uvx` present, `dotnet 10.0.301`, Ubuntu 24.04 / WSL2.
 
 2. **Onboard the current repo.** Run **`/serena-forge-setup`** in the target repository. It activates the project for Serena (`activate_project`), runs Serena onboarding, and **refuses / warns on .NET 9** projects before you hit the LSP timeout. Because the plugin is global, the project isn't hardcoded in the server config — the setup skill activates whichever repo you're in.
 
-3. **Work.** Use `/serena-navigate` to explore symbols and `/serena-refactor` to make symbolic edits. `.cs` writes via the native tools will be denied with a message pointing you at Serena.
+3. **Work.** Use `/serena-navigate` to explore symbols and `/serena-refactor` to make symbolic edits. `.cs` writes via native tools will be denied with a message pointing you at Serena.
 
 ### Optional: pin the read discipline in `CLAUDE.md`
 
@@ -102,7 +102,8 @@ The `SessionStart` banner injects the Serena-first workflow every session, but a
 | Var | Default | Effect |
 | --- | --- | --- |
 | `SERENA_FORGE_BUILD` | `1` | `0` disables the end-of-turn `dotnet build` safety net. |
-| `SERENA_FORGE_READ_MAXLINES` | `100` | Line threshold above which a whole-file `.cs` `Read` prompts for confirmation; `0` disables the read nudge. |
+| `SERENA_FORGE_BUILD_ON_FAIL` | `block` | `warn` reports build failures without blocking the Stop hook (useful for TDD/Superpowers red phase); `block` forces strict mode. |
+| `SERENA_FORGE_TDD` | `0` | `1` enables report-only build failures for TDD red/green workflows. |
 
 ---
 
@@ -113,7 +114,7 @@ There is **no bypass** to reach for — that is deliberate (see Design decision 
 1. Wait out the normal ~30 s cold-init and retry once if it looks like a warm-up delay (see Pitfalls).
 2. Otherwise **stop and ask you** — reporting the specific cause (LSP unavailable / timed out / `.NET 9` / change not expressible symbolically) — so you can either fix Serena or disable the hook. The agent never falls back to native `.cs` edits.
 
-To turn enforcement off yourself, disable the plugin (or remove the `enforce-serena-write.sh` hook entry). That is a human action, not something the agent does on its own.
+To turn enforcement off yourself, disable the plugin (or remove the `enforce_serena_write.py` hook entry). That is a human action, not something the agent does on its own.
 
 ---
 
@@ -123,14 +124,24 @@ To turn enforcement off yourself, disable the plugin (or remove the `enforce-ser
 
 | Hook | Event / matcher | What it does |
 | --- | --- | --- |
-| `hooks/enforce-serena-write.sh` | `PreToolUse` · `Edit\|Write\|MultiEdit` | DENY writes to `*.cs`; message redirects to Serena symbol tools (and, on an un-onboarded repo, tells the agent to propose `/serena-forge-setup`). Non-`.cs` writes pass through. |
-| `hooks/prefer-symbolic-read.sh` | `PreToolUse` · `Read` | ASK (one-click) on a whole-file `Read` of a `.cs` file over ~100 lines, steering to `get_symbols_overview` / `find_symbol`. Bounded reads (`limit` set) and small files pass through. Threshold: `SERENA_FORGE_READ_MAXLINES` (0 disables). |
-| `hooks/protect-commands.sh` | `PreToolUse` · `Bash` | ASK/DENY on the destructive command set above. |
-| `hooks/queue-build.sh` | `PostToolUse` · Serena write tools | Cheap: resolves the nearest `.csproj` for the edited symbol and appends it to a per-repo (TMPDIR) build queue. No build here. |
-| `hooks/flush-build-queue.sh` | `Stop` | Drains the queue and runs one scoped `dotnet build --no-restore` per touched project. On failure, **blocks the stop** and feeds the compiler errors back (loop-guarded via `stop_hook_active`). Opt out with `SERENA_FORGE_BUILD=0`. |
-| `hooks/session-context.sh` | `SessionStart` · `startup\|resume\|clear\|compact` | Injects the Serena-first navigation protocol (mandatory read workflow + build-net note) and, on an un-onboarded repo, the onboard-on-demand instruction. |
+| `hooks/enforce_serena_write.py` | `PreToolUse` · `Edit\|Write\|MultiEdit` | DENY native writes to `*.cs`; message redirects to Serena symbol/file edit tools and, on an un-onboarded repo, tells the agent to propose `/serena-forge-setup`. Non-`.cs` writes pass through. |
+| `hooks/protect_commands.py` | `PreToolUse` · `Bash` | ASK/DENY on the destructive command set above. |
+| `hooks/queue_build.py` | `PostToolUse` · Serena write tools | Cheap: resolves the nearest `.csproj` after symbol edits and Serena file edits (`create_text_file`, `replace_lines`, `insert_at_line`, `delete_lines`, `replace_content`, `replace_in_files`) and appends it to a per-repo temp build queue. No build here. |
+| `hooks/flush_build_queue.py` | `Stop` | Drains the queue and runs one scoped `dotnet build --no-restore` per touched project. On failure, blocks by default, but reports-only in TDD/Superpowers mode (`SERENA_FORGE_TDD=1`, `SERENA_FORGE_BUILD_ON_FAIL=warn`, `SUPERPOWERS*`, `.superpowers/`, or `superpowers.md`). Opt out with `SERENA_FORGE_BUILD=0`. |
+| `hooks/session_context.py` | `SessionStart` · `startup\|resume\|clear\|compact` | Injects the Serena-first navigation protocol (mandatory read workflow + build-net note) and, on an un-onboarded repo, the onboard-on-demand instruction. |
 
-All hooks **fail open on their own malfunction**: an internal error or a missing dependency (e.g. `jq`) results in *allow* — the plugin never blocks the user because of its own bug. This is internal robustness, not a user-facing bypass: it is never advertised to the agent as a way around the block, and it cannot be triggered on purpose.
+All hooks **fail open on their own malfunction**: an internal error or malformed payload results in *allow* — the plugin never blocks the user because of its own bug. This is internal robustness, not a user-facing bypass: it is never advertised to the agent as a way around the block, and it cannot be triggered on purpose.
+
+
+### End-of-turn build in TDD / Superpowers
+
+The build hook keeps its strong default for normal refactors: if touched C#
+projects do not compile, the Stop hook blocks once and feeds compiler errors back
+to the agent. TDD workflows intentionally spend time in the red phase, so the
+Python hook downgrades build failures to report-only when it detects a TDD
+context (`SERENA_FORGE_TDD=1`, `SERENA_FORGE_BUILD_ON_FAIL=warn`, any
+`SUPERPOWERS*` environment variable, `.superpowers/`, or `superpowers.md`). To
+force the strict gate even in those sessions, set `SERENA_FORGE_BUILD_ON_FAIL=block`.
 
 ### Skills
 
@@ -169,3 +180,62 @@ Serena writes a per-project `.serena/` folder (project config, memories, caches)
 Only the `cache/` subfolder is machine-local and churny, so that's all you ignore. (If a team decides their memories carry repo-sensitive detail they don't want in git, that's a per-repo opt-out — but the default is: commit them.)
 
 > **Why not just add a code graph too?** On large C# (Wolverine/DDD, heavy DI, extension methods, convention-discovered handlers) a tree-sitter graph mis-resolves or over-approximates edges that Roslyn resolves exactly, and it's read-only. Serena (LSP/Roslyn) is the single source of truth for **both read and write**, committed memories give you persistence, and the `dotnet build` hook gives you the safety net. The one case where a precomputed graph earns its keep is **frequent cross-repo exploration** ("who depends on this contract across the 6 repos?"), where it beats cold-starting a language server per repo — that's out of scope for this plugin, which is deliberately single-repo and Serena-only.
+
+---
+
+## Codex port (branch `codex-port`)
+
+This branch also packages serena-forge as a **Codex plugin** while keeping the
+Claude Code plugin files intact.
+
+### Codex plugin layout
+
+| File | Purpose |
+| --- | --- |
+| `.codex-plugin/plugin.json` | Required Codex plugin manifest for local/plugin-directory installation. |
+| `.codex/config.toml` | Codex configuration sample: enables hooks and registers the same Serena MCP server through Codex's `mcp_servers.serena` TOML format. |
+| `hooks/hooks.json` | Shared lifecycle hook bundle. Codex discovers this default hook file from the plugin root; Claude Code continues to use the same file. |
+| `AGENTS.md` | Codex startup/session instructions that mirror the SessionStart hook: Serena-first C# navigation, Serena-only `.cs` mutation, onboarding on demand, build failures as unfinished work, and no command-guard workarounds. |
+
+### What changes for Codex
+
+- **Same Serena MCP server.** The Codex config launches Serena with `uvx -p 3.13
+  --from git+https://github.com/oraios/serena serena start-mcp-server` and the
+  bundled `contexts/serena-forge.yml` context.
+- **Same hooks, Python implementation.** Codex exposes native edits to hooks as
+  `apply_patch`, so `enforce_serena_write.py` scans patch headers as well as
+  Claude Code `file_path` payloads. Hook commands now call Python scripts directly; the Bash entrypoints have been removed.
+- **Command safety is strong without being noisy.** Catastrophic commands are
+  denied, recoverable destructive commands ask for consent, and low-risk cleanup
+  such as `/tmp`, `bin/`, `obj/`, `.cache`, generated C# artifacts, and source-generator output is allowed silently.
+- **Auto session context.** The shared `SessionStart` hook still injects the
+  Serena-first protocol. `AGENTS.md` duplicates the same rules in Codex's native
+  repository instruction mechanism so a session starts with the right policy even
+  before hook trust is reviewed.
+
+### Local Codex usage
+
+1. Install or enable this folder as a Codex plugin from your plugin directory or
+   marketplace.
+2. Review and trust the plugin hooks with `/hooks` when Codex prompts you.
+3. If you are testing directly from this repository, trust the project-local
+   `.codex/config.toml`; otherwise copy its `mcp_servers.serena` block into
+   `~/.codex/config.toml` or a Codex profile.
+4. Onboard each target .NET repo with the `serena-forge-setup` skill before the
+   first C# edit.
+
+
+### Python hook implementation
+
+The active hook entrypoints in `hooks/hooks.json` call Python scripts directly. This removes the runtime dependency on Unix-only parsing tools such as `jq`, `awk`, `sed`, `wc`, `cksum`, and Bash-specific string features; the Bash entrypoints have been removed.
+
+The relaxed-but-safe defaults are:
+
+- native edits to `.cs` are denied as a safety backstop and steer agents to Serena file/symbol edit tools;
+- `rm` under `/tmp` / `$TMPDIR`, build-output folders, caches, and generated
+  artifacts is allowed silently;
+- catastrophic deletes such as recursive forced removal of `/`, `~`, `$HOME`, or
+  `--no-preserve-root` are still denied;
+- recoverable destructive operations (`git reset --hard`, `git clean -f`, force
+  pushes, database drops, unqualified SQL updates/deletes, and non-low-risk file
+  deletion) ask for user confirmation.

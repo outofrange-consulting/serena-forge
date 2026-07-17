@@ -19,9 +19,7 @@ allowed-tools: "Bash Read Grep Glob Edit Write"
 
 Serena gives symbol-level **read and edit** tools (find/rename/replace a symbol,
 find references) for the repo you are in right now. `serena-forge` enforces this
-globally: direct `Edit`/`Write`/`MultiEdit` on `.cs` files is DENIED and you are
-redirected to Serena's symbolic edits. So a repo you actually want to change in
-C# must be onboarded first, or you cannot edit its `.cs` files at all.
+globally: direct `Edit`/`Write`/`MultiEdit` on hand-authored `.cs` files asks for user consent and redirects you to Serena's symbolic edits. So a repo you actually want to change in C# should be onboarded first; otherwise every native `.cs` edit becomes an explicit human override instead of the normal path.
 
 This skill onboards **one repo** — the current working directory.
 
@@ -152,7 +150,7 @@ runtime via `activate_project` in step 2 below, not pinned at launch.)
 ## Onboarding on demand (repo not yet initialized)
 
 serena-forge is global, so you will land in repos that were never onboarded.
-Because `.cs` writes are blocked everywhere, an un-onboarded repo cannot be
+Because native `.cs` writes are consent-gated everywhere, an un-onboarded repo cannot be
 edited until this skill runs. When C# work is requested in such a repo (no
 `.serena/` folder), **propose onboarding to the user and run this skill once they
 agree** — the SessionStart banner and the write-block message both steer you
@@ -177,7 +175,7 @@ un-onboard a repo, call `remove_project`; deleting `.serena/` also resets it.
 
 ## When onboarding can't succeed
 
-Because `.cs` writes are blocked globally, a repo where Serena's LSP won't come
+Because native `.cs` writes are consent-gated globally, a repo where Serena's LSP won't come
 up (the ~30s init never completes, a .NET 9 project, a Roslyn download failure)
 leaves you unable to edit its `.cs` files. There is **no bypass** — do not route
 around the write block.

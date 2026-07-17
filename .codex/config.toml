@@ -1,0 +1,24 @@
+# serena-forge :: Codex project/profile configuration sample.
+# Copy this into ~/.codex/config.toml, a Codex profile, or keep it as a trusted
+# repo-local .codex/config.toml while developing the plugin.
+
+[features]
+hooks = true
+
+[mcp_servers.serena]
+command = "uvx"
+args = [
+  "-p",
+  "3.13",
+  "--from",
+  "git+https://github.com/oraios/serena",
+  "serena",
+  "start-mcp-server",
+  "--context",
+  "./contexts/serena-forge.yml",
+  "--open-web-dashboard",
+  "False",
+]
+startup_timeout_sec = 30
+tool_timeout_sec = 120
+required = true

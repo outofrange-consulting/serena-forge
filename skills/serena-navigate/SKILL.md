@@ -77,7 +77,7 @@ Use only these names:
   settles rather than concluding the symbol is absent.
 - **Reading `.cs` is still allowed — but whole-file reads are nudged.** serena-forge
   blocks *writes* to `.cs`, not reads. However, a native whole-file `Read` of a
-  `.cs` file over ~100 lines triggers a one-click confirmation (`prefer-symbolic-read.sh`)
+  `.cs` file over ~100 lines triggers a one-click confirmation (`prefer_symbolic_read.py`)
   steering you to `get_symbols_overview` → `find_symbol` (`include_body: true`) on
   just the target. A bounded `Read` (with `limit`) and files under the threshold
   pass through silently. Reach for the symbol tools first so you pull the minimum

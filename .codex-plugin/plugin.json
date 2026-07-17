@@ -1,0 +1,36 @@
+{
+  "name": "serena-forge",
+  "version": "0.3.0",
+  "description": "Codex port of serena-forge: bundles Serena MCP, Serena-first C# workflows, .cs write enforcement hooks, build checks, and destructive-command protection.",
+  "author": {
+    "name": "outofrange-consulting"
+  },
+  "keywords": [
+    "serena",
+    "codex",
+    "csharp",
+    "dotnet",
+    "roslyn",
+    "hooks",
+    "mcp"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "serena-forge",
+    "shortDescription": "Force Serena-first C# editing and guarded shell operations in Codex.",
+    "longDescription": "Bundles Serena MCP, Serena-first C# navigation/refactor skills, lifecycle hooks that block native .cs patches, end-of-turn dotnet builds, and destructive-command protection for Codex.",
+    "developerName": "outofrange-consulting",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Onboard this .NET repo with Serena.",
+      "Refactor this C# symbol through Serena.",
+      "Find callers with Serena before editing."
+    ],
+    "brandColor": "#2563EB"
+  }
+}
